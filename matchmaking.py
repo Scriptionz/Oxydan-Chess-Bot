@@ -1,5 +1,6 @@
 import time
 import random
+import itertools
 
 class Matchmaker:
     def __init__(self, client, config):

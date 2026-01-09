@@ -21,21 +21,20 @@ jobs:
       - name: Oxydan Motorunu Derle
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang
+          sudo apt-get install -y build-essential clang llvm
           
           cd src
-          # Varsa eski kalıntıları temizle
+          # Önceki başarısız denemenin kalıntılarını temizleyelim
           make clean
           
-          # 'pgo' yerine 'build' veya 'generic' hedefini deneyerek hatayı bypass ediyoruz
-          # Eğer bunlar olmazsa doğrudan clang ile derleme komutunu zorlayacağız
-          make -j4 build || make -j4 generic || make -j4 clang || make -j4
+          # 'pgo' yerine hata vermeyen 'clang' veya 'native' hedefini zorluyoruz.
+          # Bu komut llvm-profdata aracına ihtiyaç duymaz.
+          make -j4 clang || make -j4 native || make -j4 build
           
-          # Dosya adını Oxydan olarak düzelt
+          # Dosya adını Oxydan olarak düzelt (Ethereal olarak çıkarsa)
           if [ -f "Ethereal" ]; then mv Ethereal Oxydan; fi
           if [ -f "ethereal" ]; then mv ethereal Oxydan; fi
           
-          # Çalıştırma izni ver
           chmod +x Oxydan
           cd ..
 

@@ -18,26 +18,22 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Oxydan Motorunu Derle
+      - name: Ethereal Motorunu Derle
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang llvm
+          sudo apt-get install -y build-essential clang
           
           cd src
-          # Önceki başarısız denemenin kalıntılarını temizleyelim
+          # Varsa eski hatalı derlemeleri silelim
           make clean
           
-          # 'pgo' yerine hata vermeyen 'clang' veya 'native' hedefini zorluyoruz.
-          # Bu komut llvm-profdata aracına ihtiyaç duymaz.
-          make -j4 clang || make -j4 native || make -j4 build
+          # 'pgo' olmayan, en temel derleme hedefini (build) kullanıyoruz
+          make -j4 build
           
-          # Dosya adını Oxydan olarak düzelt (Ethereal olarak çıkarsa)
-          if [ -f "Ethereal" ]; then mv Ethereal Oxydan; fi
-          if [ -f "ethereal" ]; then mv ethereal Oxydan; fi
-          
-          chmod +x Oxydan
+          # Çıkan dosyaya (Ethereal) çalışma izni veriyoruz
+          chmod +x Ethereal
           cd ..
-
+          
       - name: Gerekli Kütüphaneleri Kur
         run: |
           pip install python-chess backoff requests urllib3 berserk

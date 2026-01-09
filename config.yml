@@ -5,6 +5,10 @@ engine:
   dir: "./src/"
   name: "Ethereal"
   protocol: "uci"
+  uci_options:
+    Threads: 2            # GitHub Actions'da 2 thread idealdir
+    Hash: 128             # Hafızayı biraz artıralım (MB cinsinden)
+    Move Overhead: 500    # İnternet gecikmesi için 0.5 saniye pay bırak
 
 # --- SAVAŞ MODU AYARLARI ---
 

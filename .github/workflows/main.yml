@@ -26,7 +26,7 @@ jobs:
 
       - name: Kutuphaneleri Kur
         run: |
-          pip install chess python-chess berserk requests
+          pip install -r requirements.txt
 
       - name: Botu Baslat
         env:

@@ -15,11 +15,12 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Ethereal Motorunu Derle
+      - name: Motoru Manuel Derle
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential clang
           cd src
+          # Burasi kritik: Makefile'i kullanmiyoruz, dogrudan C dosyalarini derliyoruz
           clang -O3 -std=gnu11 -Wall -Wextra -DNDEBUG -flto -DUSE_NNUE=0 -march=native *.c pyrrhic/tbprobe.c -lpthread -lm -o Ethereal
           chmod +x Ethereal
           cd ..

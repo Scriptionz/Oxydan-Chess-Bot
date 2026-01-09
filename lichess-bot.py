@@ -96,7 +96,11 @@ def main():
         for event in client.bots.stream_incoming_events():
             if event['type'] == 'challenge':
                 # Gelen her türlü meydan okumayı kabul et
-                client.challenges.accept(event['challenge']['id'])
+                try:
+                    client.challenges.accept(event['challenge']['id'])
+                    except Exception as e:
+                    print(f"Hata: Meydan okuma artık geçerli değil (rakip iptal etmiş olabilir): {e}")
+                continue  # Bu satır, hatayı geçip döngünün başına dönmesini sağlar
                 print("Meydan okuma kabul edildi!")
             elif event['type'] == 'gameStart':
                 handle_game(client, event['game']['id'], bot)

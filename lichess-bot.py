@@ -7,6 +7,9 @@ import chess.polyglot
 
 # --- AYARLAR ---
 TOKEN = os.environ.get('LICHESS_TOKEN')
+print(f"Token sistemden okundu mu?: {'EVET' if TOKEN else 'HAYIR'}")
+if TOKEN:
+    print(f"Token uzunluğu: {len(TOKEN)} karakter")
 # Derlediğiniz ve "ready" cevabını aldığımız EXE'nin tam yolu
 EXE_PATH = "./src/Ethereal"
 

@@ -1,0 +1,35 @@
+name: Oxydan Lichess Bot
+
+on:
+  schedule:
+    - cron: '0 */6 * * *' # Her 6 saatte bir otomatik çalışır
+  workflow_dispatch:      # Elle başlatma butonu (Actions sekmesinde görünür)
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Kodları Çek
+        uses: actions/checkout@v3
+
+      - name: Python Kurulumu
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Oxydan Motorunu Derle
+        run: |
+          cd src
+          make -j4 # İşlemci gücünü kullanarak hızlıca derler
+          chmod +x Oxydan # Çalıştırma izni verir
+          cd ..
+
+      - name: Gerekli Kütüphaneleri Kur
+        run: |
+          pip install python-chess backoff requests urllib3
+
+      - name: Botu Lichess'e Bağla
+        run: python3 lichess-bot.py
+        env:
+          LICHESS_TOKEN: ${{ secrets.LICHESS_TOKEN }}

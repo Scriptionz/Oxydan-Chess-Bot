@@ -20,9 +20,13 @@ jobs:
 
       - name: Oxydan Motorunu Derle
         run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm
           cd src
-          make -j4 # İşlemci gücünü kullanarak hızlıca derler
-          chmod +x Oxydan # Çalıştırma izni verir
+          make -j4
+          # Eğer dosya Ethereal adıyla çıktıysa ismini Oxydan yapalım
+          if [ -f "Ethereal" ]; then mv Ethereal Oxydan; fi
+          chmod +x Oxydan
           cd ..
 
       - name: Gerekli Kütüphaneleri Kur

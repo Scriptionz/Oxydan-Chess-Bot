@@ -98,12 +98,16 @@ def main():
                 # Gelen her türlü meydan okumayı kabul et
                 try:
                     client.challenges.accept(event['challenge']['id'])
-                    except Exception as e:
+                    print("Meydan okuma kabul edildi!")
+                except Exception as e:
                     print(f"Hata: Meydan okuma artık geçerli değil (rakip iptal etmiş olabilir): {e}")
-                continue  # Bu satır, hatayı geçip döngünün başına dönmesini sağlar
-                print("Meydan okuma kabul edildi!")
+                    continue  # Sadece hata durumunda döngünün başına dön
+
             elif event['type'] == 'gameStart':
                 handle_game(client, event['game']['id'], bot)
+
+    except Exception as ana_hata:
+        print(f"Ana döngüde beklenmedik hata: {ana_hata}")
     except KeyboardInterrupt:
         print("Bot kapatılıyor...")
         bot.quit()

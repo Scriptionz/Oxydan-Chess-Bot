@@ -1,6 +1,30 @@
-token: "$LICHESS_TOKEN"  # Bu şekilde bırakıyoruz, GitHub bunu otomatik dolduracak.
+token: "$LICHESS_TOKEN"
 url: "https://lichess.org/"
+
 engine:
   dir: "./src/"
   name: "Ethereal"
   protocol: "uci"
+
+# --- SAVAŞ MODU AYARLARI ---
+
+# Kimlerin meydan okumasını kabul etsin?
+challenge_policy:
+  accept_bot: true      # Diğer botlarla oynayıp puan kassın.
+  accept_human: true    # İnsanlarla oynasın.
+  rated: true           # PUANLI maçları kabul etsin (Reyting için kritik).
+  modes:
+    - casual
+    - rated
+  time_controls:
+    - bullet
+    - blitz
+    - rapid
+  min_time: 60          # En az 1 dakikalık maçlar.
+  max_time: 1200        # En fazla 20 dakikalık maçlar.
+
+# Botun kendi kendine maç araması için:
+matchmaking:
+  allow_anyone: true    # Havuzdaki herkesle eşleşsin.
+  min_rating: 600       # Çok düşük seviyelerle vakit kaybetmesin.
+  max_rating: 3000      # Devlerle kapışmaktan korkmasın.

@@ -1,6 +1,6 @@
-token: "lip_ChZ5uegZ7DrJrkHEDpwp"
+token: "$LICHESS_TOKEN"  # Bu şekilde bırakıyoruz, GitHub bunu otomatik dolduracak.
 url: "https://lichess.org/"
 engine:
   dir: "./src/"
-  name: "Oxydan"
+  name: "Ethereal"
   protocol: "uci"

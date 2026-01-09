@@ -4,6 +4,9 @@ import chess.engine
 import os
 import time
 import chess.polyglot
+import threading
+from matchmaking import Matchmaker # Dosya adının matchmaking.py olduğundan eminiz
+import yaml  # En üste, diğer importların yanına ekle
 
 # --- AYARLAR ---
 TOKEN = os.environ.get('LICHESS_TOKEN')
@@ -85,23 +88,46 @@ def handle_game(client, game_id, bot):
         print(f"Oyun sırasında hata: {e}")
 
 def main():
+    # 1. AYARLARI YÜKLE
+    try:
+        with open("config.yml", "r") as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        print(f"HATA: config.yml okunamadı: {e}")
+        return
+
     bot = OxydanAegisV8(EXE_PATH)
     session = berserk.TokenSession(TOKEN)
     client = berserk.Client(session=session)
     
     print("Oxydan v8.0 Hybrid (Python Wrapper + C++ Core) Başlatıldı.")
-    print("Lichess üzerinde maç bekleniyor...")
 
+    # 2. MATCHMAKING (AVCI MODU) BAŞLATMA
+    if config.get("matchmaking"):
+        try:
+            # Matchmaker'ı oluşturuyoruz
+            # Not: matchmaking.py dosyanın içeriğine göre parametreler değişebilir
+            # Standart yapıda (client, config) yeterlidir.
+            mm = Matchmaker(client, config) 
+            
+            # Ayrı bir thread'de başlatıyoruz ki ana döngüyü (stream) kilitlemesin
+            threading.Thread(target=mm.start, daemon=True).start()
+            print("Matchmaking (Avcı Modu) Arka Planda Başlatıldı. Rakip aranıyor...")
+        except Exception as e:
+            print(f"Matchmaking başlatılamadı: {e}")
+
+    print("Lichess üzerinde gelen maçlar da dinleniyor...")
+
+    # 3. ANA DÖNGÜ (Gelen Meydan Okumalar)
     try:
         for event in client.bots.stream_incoming_events():
             if event['type'] == 'challenge':
-                # Gelen her türlü meydan okumayı kabul et
                 try:
                     client.challenges.accept(event['challenge']['id'])
-                    print("Meydan okuma kabul edildi!")
+                    print("Gelen meydan okuma kabul edildi!")
                 except Exception as e:
-                    print(f"Hata: Meydan okuma artık geçerli değil (rakip iptal etmiş olabilir): {e}")
-                    continue  # Sadece hata durumunda döngünün başına dön
+                    print(f"Hata: Meydan okuma artık geçerli değil: {e}")
+                    continue
 
             elif event['type'] == 'gameStart':
                 handle_game(client, event['game']['id'], bot)

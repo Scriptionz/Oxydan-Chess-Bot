@@ -1,5 +1,10 @@
+import os
 import sys
-import os  # os'u buraya, sys'in hemen altına çekiyoruz
+
+# 1. ADIM: Python'a "önce kendi klasörüne bak" emrini veriyoruz (BU SATIR KRİTİK)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# 2. ADIM: Şimdi diğer kütüphaneleri ve kendi modülümüzü çağırabiliriz
 import berserk
 import chess
 import chess.engine
@@ -7,10 +12,7 @@ import time
 import chess.polyglot
 import threading
 import yaml
-from matchmaking import Matchmaker
-
-# Artık sys.path eklemesini güvenle yapabiliriz
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from matchmaking import Matchmaker # Artık hata vermeyecek
 
 # --- AYARLAR ---
 TOKEN = os.environ.get('LICHESS_TOKEN')

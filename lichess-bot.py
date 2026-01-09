@@ -6,7 +6,7 @@ import time
 import chess.polyglot
 
 # --- AYARLAR ---
-TOKEN = os.getenv("lip_ChZ5uegZ7DrJrkHEDpwp")
+TOKEN = os.environ.get('LICHESS_TOKEN')
 # Derlediğiniz ve "ready" cevabını aldığımız EXE'nin tam yolu
 EXE_PATH = "./src/Ethereal"
 

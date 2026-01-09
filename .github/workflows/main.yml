@@ -27,7 +27,7 @@ jobs:
 
       - name: Gerekli Kütüphaneleri Kur
         run: |
-          pip install python-chess backoff requests urllib3
+          pip install python-chess backoff requests urllib3 berserk
 
       - name: Botu Lichess'e Bağla
         run: python3 lichess-bot.py

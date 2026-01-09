@@ -1,0 +1,6 @@
+token: "lip_ChZ5uegZ7DrJrkHEDpwp"
+url: "https://lichess.org/"
+engine:
+  dir: "./src/"
+  name: "Oxydan"
+  protocol: "uci"

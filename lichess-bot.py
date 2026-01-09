@@ -1,14 +1,16 @@
-import berserk
 import sys
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+import os  # os'u buraya, sys'in hemen altına çekiyoruz
+import berserk
 import chess
 import chess.engine
-import os
 import time
 import chess.polyglot
 import threading
-from matchmaking import Matchmaker # Dosya adının matchmaking.py olduğundan eminiz
-import yaml  # En üste, diğer importların yanına ekle
+import yaml
+from matchmaking import Matchmaker
+
+# Artık sys.path eklemesini güvenle yapabiliriz
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # --- AYARLAR ---
 TOKEN = os.environ.get('LICHESS_TOKEN')

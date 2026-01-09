@@ -23,8 +23,25 @@ challenge_policy:
   min_time: 60          # En az 1 dakikalık maçlar.
   max_time: 1200        # En fazla 20 dakikalık maçlar.
 
-# Botun kendi kendine maç araması için:
+# ... (üst kısımlar aynı)
+
 matchmaking:
-  allow_anyone: true    # Havuzdaki herkesle eşleşsin.
-  min_rating: 600       # Çok düşük seviyelerle vakit kaybetmesin.
-  max_rating: 3000      # Devlerle kapışmaktan korkmasın.
+  allow_feed: true
+  challenge_interval: 20        # 30'dan 20'ye düşürdük, daha sık arayacak
+  challenge_timeout: 120
+  max_games: 1
+  
+  opponent_min_rating: 1200     # Alt sınırı biraz daha çektik
+  opponent_max_rating: 2500     # Üst sınırı 2500 yaptık (Lynx hala dışarıda)
+  opponent_rating_difference: 600 # Daha geniş bir av sahası
+  
+  time_controls:
+    - "1+0"
+    - "2+1"
+    - "3+0"
+    - "3+2"
+    - "5+0"
+    - "10+0"
+    
+  challenge_bots: true
+  challenge_humans: false

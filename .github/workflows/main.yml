@@ -32,4 +32,12 @@ jobs:
         env:
           LICHESS_TOKEN: ${{ secrets.LICHESS_TOKEN }}
         run: |
-          python lichess-bot.py
+          # Token'ı config içine yerleştir (Bağlantı için kritik)
+          sed -i "s/\$LICHESS_TOKEN/$LICHESS_TOKEN/g" config.yml
+          
+          # Otomatik Yeniden Başlatma Döngüsü
+          for i in {1..10}; do
+            echo "Oxydan v8.0 Başlatılıyor (Deneme $i/10)..."
+            python lichess-bot.py && break || echo "Bot çöktü veya durdu, 5 saniye içinde tekrar denenecek..."
+            sleep 5
+          done

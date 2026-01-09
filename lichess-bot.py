@@ -8,7 +8,7 @@ import chess.polyglot
 # --- AYARLAR ---
 TOKEN = os.getenv("lip_ChZ5uegZ7DrJrkHEDpwp")
 # Derlediğiniz ve "ready" cevabını aldığımız EXE'nin tam yolu
-EXE_PATH = "./src/Oxydan"
+EXE_PATH = "./src/Ethereal"
 
 class OxydanAegisV8:
     def __init__(self, exe_path):

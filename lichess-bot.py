@@ -25,21 +25,51 @@ EXE_PATH = "./src/Ethereal"
 class OxydanAegisV8:
     def __init__(self, exe_path, uci_options=None):
         self.exe_path = exe_path
+        # Kitabı BURADA bir kez açıyoruz, her hamlede değil!
+        self.book_path = "./M11.2.bin"
+        
         try:
-            self.engine = chess.engine.SimpleEngine.popen_uci(self.exe_path)
+            # Motoru 15 saniye sınırıyla başlat
+            self.engine = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=15)
             
-            # Eğer config'den gelen ayarlar varsa, hepsini motora uygula
             if uci_options:
-                for option_name, option_value in uci_options.items():
-                    try:
-                        self.engine.configure({option_name: option_value})
-                        print(f"Ayar Başarılı: {option_name} -> {option_value}")
-                    except Exception as e:
-                        print(f"Uyarı: {option_name} ayarı uygulanamadı (Motor desteklemiyor olabilir): {e}")
+                for name, value in uci_options.items():
+                    self.engine.configure({name: value})
+                    print(f"Ayar: {name} -> {value}", flush=True) # flush önemli!
             
-            print("C++ Oxydan Core Bağlandı ve Özelleştirildi.")
+            print("C++ Oxydan Core Bağlandı.", flush=True)
         except Exception as e:
-            print(f"KRİTİK HATA: Motor başlatılamadı! {e}")
+            print(f"KRİTİK: Motor Başlatılamadı: {e}", flush=True)
+            sys.exit(1)
+
+    def get_best_move(self, board, opponent_rating=2500, my_time=180000, increment=0):
+        # 1. KİTAP KONTROLÜ (Hızlı ve Güvenli)
+        if os.path.exists(self.book_path):
+            try:
+                with chess.polyglot.open_reader(self.book_path) as reader:
+                    entry = reader.get(board)
+                    if entry:
+                        print(f"Kitap Hamlesi: {entry.move}", flush=True)
+                        return entry.move
+            except: pass
+
+        # 2. MOTOR HESAPLAMA
+        try:
+            # Süre None gelirse 60 saniye varsay
+            t = my_time if my_time else 60000 
+            
+            # Dinamik limit belirleme
+            if opponent_rating >= 2750:
+                limit = chess.engine.Limit(time=max(2.0, (t/1000)*0.05), depth=24)
+            else:
+                limit = chess.engine.Limit(time=0.5, depth=18)
+
+            # Motorun takılmasını önlemek için play fonksiyonuna da timeout ekle
+            result = self.engine.play(board, limit, timeout=limit.time + 5.0)
+            return result.move
+        except Exception as e:
+            print(f"Motor Hatası: {e}", flush=True)
+            return list(board.legal_moves)[0]
             
     def get_best_move(self, board, opponent_rating=2500, my_time=180000, increment=0):
         # 1. ÖNCE KİTABA BAK

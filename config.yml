@@ -6,35 +6,37 @@ engine:
   name: "Ethereal"
   protocol: "uci"
   uci_options:
-    Threads: 2            # GitHub Actions'da 2 thread idealdir
-    Hash: 128             # Hafızayı biraz artıralım (MB cinsinden)
-    Move Overhead: 500    # İnternet gecikmesi için 0.5 saniye pay bırak
+    Threads: 2            # GitHub Actions için ideal
+    Hash: 256             # 2500+ seviyesi için hafızayı 256MB'a çıkardım (daha çok hamle hatırlar)
+    Move Overhead: 1000   # 1 saniye pay bıraktım (Derin düşünürken süre bitmesin diye 500'den 1000'e çıkardım)
+    # Ethereal'e özgü derinlik ayarları (opsiyonel):
+    # Skill Level: 20
 
 # --- SAVAŞ MODU AYARLARI ---
 
-# Kimlerin meydan okumasını kabul etsin?
 challenge_policy:
-  accept_bot: true      # Diğer botlarla oynayıp puan kassın.
-  accept_human: true    # İnsanlarla oynasın.
-  rated: true           # PUANLI maçları kabul etsin (Reyting için kritik).
+  accept_bot: true
+  accept_human: true
+  rated: true
   modes:
-    - casual
-    - rated
+    - rated               # Artık sadece PUANLI maçlara odaklanalım, 2600'ü koruyalım
   time_controls:
     - bullet
     - blitz
-    - rapid
-  min_time: 60          # En az 1 dakikalık maçlar.
-  max_time: 1200        # En fazla 20 dakikalık maçlar.
+  min_time: 60
+  max_time: 300           # Çok uzun maçlarda (Rapid) vakit kaybetmesin, Blitz/Bullet uzmanı kalsın
 
 matchmaking:
   allow_feed: true
-  challenge_interval: 30        # 15 saniyeye düşürdüm (Daha agresif arama)
-  challenge_timeout: 30         # Cevap vermeyeni hemen geç
+  challenge_interval: 45        # 30 çok agresif olabilir, 45 saniye Lichess ban riskini azaltır
+  challenge_timeout: 30
   max_games: 1
-  opponent_min_rating: 1000
-  opponent_max_rating: 2500
-  opponent_rating_difference: 800
+  
+  # --- ELO FİLTRESİ (KRİTİK GÜNCELLEME) ---
+  opponent_min_rating: 1500     # 1000'den 2200'e çıkardım. Düşük botlar puan vermez, sadece risk yaratır.
+  opponent_max_rating: 2850     # 2500'den 2850'ye çıkardım. 2900'lük "abort" botlarından kaçınır ama 2700'lükleri avlar.
+  opponent_rating_difference: 400 # Çok zayıf veya çok güçlülerle oynamasın, kendi dengini bulsun.
+
   time_controls:
     - "1+0"
     - "2+1"
@@ -43,4 +45,4 @@ matchmaking:
     - "5+0"
   challenge_bots: true
   challenge_humans: false
-  selection: "random"           # Rakibi rastgele seç (Bunu eklemek çözebilir)
+  selection: "random"           # "Farming" damgası yememek için rastgele seçim en iyisidir.

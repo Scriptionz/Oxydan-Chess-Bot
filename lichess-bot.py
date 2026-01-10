@@ -21,8 +21,8 @@ class OxydanAegisV8:
     def __init__(self, exe_path, uci_options=None):
         self.exe_path = exe_path
         self.book_path = "./M11.2.bin"
+        self.lock = threading.Lock()  # ÇOK ÖNEMLİ: Aynı anda tek işlem için kilit
         try:
-            # Motoru 15 saniye sınırıyla başlat
             self.engine = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=15)
             
             if uci_options:
@@ -49,37 +49,37 @@ class OxydanAegisV8:
                         return entry.move
             except: pass
 
-        # 2. SÜRE HESAPLAMA (Safe Conversion)
-        # Eğer my_time timedelta ise saniyeye çevir, değilse (ms ise) saniyeye çevir
+        # 2. SÜRE HESAPLAMA
         try:
             if isinstance(my_time, timedelta):
                 secs = my_time.total_seconds()
             else:
                 secs = float(my_time) / 1000.0
-            
             inc_secs = float(increment) / 1000.0 if not isinstance(increment, timedelta) else increment.total_seconds()
         except:
             secs, inc_secs = 60.0, 0.0
 
-        # 3. DİNAMİK LİMİT BELİRLERME
-        try:
-            if opponent_rating >= 2750:
-                calc_time = max(2.0, (secs * 0.05) + inc_secs)
-                limit = chess.engine.Limit(time=calc_time, depth=24)
-                print(f"!!! KRİTİK RAKİP ({opponent_rating}): {calc_time:.2f}s düşünülüyor...", flush=True)
-            elif opponent_rating >= 2500:
-                limit = chess.engine.Limit(time=1.0, depth=20)
-            else:
-                limit = chess.engine.Limit(time=0.5, depth=16)
+        # 3. DİNAMİK LİMİT BELİRLERME VE HESAPLAMA
+        with self.lock:  # Motoru o an sadece bu maçın kullanmasını sağlar
+            try:
+                if opponent_rating >= 2750:
+                    calc_time = max(2.0, (secs * 0.05) + inc_secs)
+                    limit = chess.engine.Limit(time=calc_time, depth=24)
+                elif opponent_rating >= 2500:
+                    limit = chess.engine.Limit(time=1.0, depth=20)
+                else:
+                    limit = chess.engine.Limit(time=0.5, depth=16)
 
-            result = self.engine.play(board, limit, timeout=limit.time + 5.0)
-            return result.move
-        except Exception as e:
-            print(f"Motor Hatası: {e}", flush=True)
-            return list(board.legal_moves)[0]
+                # DÜZELTİLDİ: 'timeout' parametresi kaldırıldı
+                result = self.engine.play(board, limit)
+                return result.move
+            except Exception as e:
+                print(f"Motor Hatası: {e}", flush=True)
+                return list(board.legal_moves)[0]
 
     def quit(self):
-        self.engine.quit()
+        with self.lock:
+            self.engine.quit()
 
 def handle_game(client, game_id, bot):
     try:
@@ -113,10 +113,13 @@ def handle_game(client, game_id, bot):
                 
                 if move:
                     client.bots.make_move(game_id, move.uci())
-                    # HATA BURADAYDI: Güvenli yazdırma formatı
                     try:
-                        t_display = my_time.total_seconds() if isinstance(my_time, timedelta) else my_time/1000
-                        print(f"Hamle: {move.uci()} (Kalan: {t_display:.1f}s)", flush=True)
+                        # my_time'ın tipini kontrol ederek yazdırma
+                        if isinstance(my_time, timedelta):
+                            t_sec = my_time.total_seconds()
+                        else:
+                            t_sec = my_time / 1000
+                        print(f"Hamle: {move.uci()} (Kalan: {t_sec:.1f}s)", flush=True)
                     except:
                         print(f"Hamle: {move.uci()}", flush=True)
 
@@ -126,6 +129,7 @@ def handle_game(client, game_id, bot):
         print(f"Oyun hatası: {e}", flush=True)
 
 def main():
+    # ... (main fonksiyonun geri kalanı aynı, değişiklik yok)
     try:
         with open("config.yml", "r") as f:
             config = yaml.safe_load(f)
@@ -153,6 +157,7 @@ def main():
                     print("Meydan okuma kabul edildi!", flush=True)
                 except: continue
             elif event['type'] == 'gameStart':
+                # threading.Thread ekleyerek botun donmasını engelliyoruz
                 threading.Thread(target=handle_game, args=(client, event['game']['id'], bot)).start()
 
     except Exception as e:

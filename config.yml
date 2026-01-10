@@ -6,11 +6,14 @@ engine:
   name: "Ethereal"
   protocol: "uci"
   uci_options:
-    Threads: 2            # GitHub Actions için ideal
-    Hash: 256             # 2500+ seviyesi için hafızayı 256MB'a çıkardım (daha çok hamle hatırlar)
-    Move Overhead: 2000   # 1 saniye pay bıraktım (Derin düşünürken süre bitmesin diye 500'den 1000'e çıkardım)
-    # Ethereal'e özgü derinlik ayarları (opsiyonel):
-    # Skill Level: 20
+    Threads: 2            # GitHub Actions (2 Core) için tam verim
+    Hash: 512             # 2800+ seviyesi için kritik. 256'dan 512'ye çıkardım (Daha derin analiz hafızası)
+    Move Overhead: 2000   # 2 saniye pay. Bot derin düşünürken internet lagı yüzünden süreyle kaybetmesin.
+    Contempt: 20          # ÖNEMLİ: Botun beraberliği hemen kabul etmemesini, galibiyet için baskı yapmasını sağlar.
+    # Syzygy Ayarları (Dosyaları eklediğinde burası hazır olacak)
+    SyzygyPath: "./syzygy"
+    SyzygyProbeDepth: 1
+    SyzygyProbeLimit: 6
 
 # --- SAVAŞ MODU AYARLARI ---
 
@@ -19,23 +22,23 @@ challenge_policy:
   accept_human: true
   rated: true
   modes:
-    - rated               # Artık sadece PUANLI maçlara odaklanalım, 2600'ü koruyalım
+    - rated               # Puan kasmak için sadece rated maçlar
   time_controls:
     - bullet
     - blitz
   min_time: 60
-  max_time: 300           # Çok uzun maçlarda (Rapid) vakit kaybetmesin, Blitz/Bullet uzmanı kalsın
+  max_time: 300           # Blitz ve Bullet uzmanlığını sürdürsün
 
 matchmaking:
   allow_feed: true
-  challenge_interval: 45        # 30 çok agresif olabilir, 45 saniye Lichess ban riskini azaltır
+  challenge_interval: 45        # Güvenli istek aralığı
   challenge_timeout: 30
   max_games: 1
   
-  # --- ELO FİLTRESİ (KRİTİK GÜNCELLEME) ---
-  opponent_min_rating: 2000     # 1000'den 2200'e çıkardım. Düşük botlar puan vermez, sadece risk yaratır.
-  opponent_max_rating: 3100     # 2500'den 2850'ye çıkardım. 2900'lük "abort" botlarından kaçınır ama 2700'lükleri avlar.
-  opponent_rating_difference: 400 # Çok zayıf veya çok güçlülerle oynamasın, kendi dengini bulsun.
+  # --- ELO FİLTRESİ (PROFESYONEL AYAR) ---
+  opponent_min_rating: 2000     # 2600 puandasın, 2450 altı botları yenmek sana puan vermez ama risk yaratır.
+  opponent_max_rating: 3200     # 3100'ü 3200 yaptım, en üst seviyedeki devleri de listeye ekleyelim.
+  opponent_rating_difference: 500 # Kendi ligindeki ve üstündeki botlarla eşleşsin.
 
   time_controls:
     - "1+0"
@@ -45,4 +48,4 @@ matchmaking:
     - "5+0"
   challenge_bots: true
   challenge_humans: false
-  selection: "random"           # "Farming" damgası yememek için rastgele seçim en iyisidir.
+  selection: "random"           # Manipülasyon olarak algılanmaması için en güvenli yöntem.

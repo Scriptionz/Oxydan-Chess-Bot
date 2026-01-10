@@ -33,7 +33,7 @@ matchmaking:
   max_games: 1
   
   # --- ELO FİLTRESİ (KRİTİK GÜNCELLEME) ---
-  opponent_min_rating: 1500     # 1000'den 2200'e çıkardım. Düşük botlar puan vermez, sadece risk yaratır.
+  opponent_min_rating: 2000     # 1000'den 2200'e çıkardım. Düşük botlar puan vermez, sadece risk yaratır.
   opponent_max_rating: 2850     # 2500'den 2850'ye çıkardım. 2900'lük "abort" botlarından kaçınır ama 2700'lükleri avlar.
   opponent_rating_difference: 400 # Çok zayıf veya çok güçlülerle oynamasın, kendi dengini bulsun.
 

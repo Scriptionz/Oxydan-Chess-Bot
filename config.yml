@@ -29,7 +29,7 @@ challenge_policy:
 
 matchmaking:
   allow_feed: true
-  challenge_interval: 15        # 15 saniyeye düşürdüm (Daha agresif arama)
+  challenge_interval: 30        # 15 saniyeye düşürdüm (Daha agresif arama)
   challenge_timeout: 30         # Cevap vermeyeni hemen geç
   max_games: 1
   opponent_min_rating: 1000

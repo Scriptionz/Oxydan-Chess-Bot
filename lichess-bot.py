@@ -32,10 +32,18 @@ class OxydanAegisV8:
             # Motoru 15 saniye sınırıyla başlat
             self.engine = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=15)
             
+            # OxydanAegisV8 içindeki __init__ kısmını bu şekilde güncelle:
+
             if uci_options:
-                for name, value in uci_options.items():
-                    self.engine.configure({name: value})
-                    print(f"Ayar: {name} -> {value}", flush=True) # flush önemli!
+                for option_name, option_value in uci_options.items():
+                    try:
+            # Her ayarı tek tek dene, hata verirse botu kapatma, sadece uyar
+                        self.engine.configure({option_name: option_value})
+                        print(f"Ayar Başarılı: {option_name} -> {option_value}", flush=True)
+                    except Exception as e:
+                        print(f"UYARI: '{option_name}' ayarı uygulanamadı (Motor desteklemiyor): {e}", flush=True)
+
+            print("C++ Oxydan Core Bağlandı ve Özelleştirildi.", flush=True)
             
             print("C++ Oxydan Core Bağlandı.", flush=True)
         except Exception as e:

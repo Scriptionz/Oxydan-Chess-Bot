@@ -23,15 +23,23 @@ if TOKEN:
 EXE_PATH = "./src/Ethereal"
 
 class OxydanAegisV8:
-    def __init__(self, exe_path):
+    def __init__(self, exe_path, uci_options=None):
         self.exe_path = exe_path
-        # C++ motorunu SimpleEngine ile başlatıyoruz (Senkron yapı)
         try:
-            # Buradaki değişikliğe dikkat: transport değişkenini sildik
             self.engine = chess.engine.SimpleEngine.popen_uci(self.exe_path)
-            print("C++ Oxydan Core Bağlandı: Bağlantı Sağlıklı.")
+            
+            # Eğer config'den gelen ayarlar varsa, hepsini motora uygula
+            if uci_options:
+                for option_name, option_value in uci_options.items():
+                    try:
+                        self.engine.configure({option_name: option_value})
+                        print(f"Ayar Başarılı: {option_name} -> {option_value}")
+                    except Exception as e:
+                        print(f"Uyarı: {option_name} ayarı uygulanamadı (Motor desteklemiyor olabilir): {e}")
+            
+            print("C++ Oxydan Core Bağlandı ve Özelleştirildi.")
         except Exception as e:
-            print(f"KRİTİK HATA: C++ motoru başlatılamadı! Yol: {exe_path}\nHata: {e}")
+            print(f"KRİTİK HATA: Motor başlatılamadı! {e}")
             
     def get_best_move(self, board, opponent_rating=2500, my_time=180000, increment=0):
         # 1. ÖNCE KİTABA BAK
@@ -52,7 +60,7 @@ class OxydanAegisV8:
             if opponent_rating >= 2750:
                 # Kalan sürenin %5'ini kullan veya en az 2 saniye düşün
                 # my_time milisaniye cinsinden gelir, saniyeye çeviriyoruz
-                calc_time = max(2.0, (my_time / 1000) * 0.05)
+                calc_time = max(2.0, ((my_time / 1000) * 0.05) + (increment / 1000))
                 limit = chess.engine.Limit(time=calc_time, depth=24)
                 print(f"!!! KRİTİK RAKİP ({opponent_rating}): {calc_time:.2f}sn / 24 Derinlik")
             elif opponent_rating >= 2500:
@@ -72,19 +80,18 @@ class OxydanAegisV8:
 def handle_game(client, game_id, bot):
     try:
         my_id = client.account.get()['id']
-        # Oyunun başında rakip reytingini alalım
-        game_full = client.bots.stream_game_state(game_id)
-        first_state = next(game_full)
-        
-        is_white = first_state['white'].get('id') == my_id
-        my_color = chess.WHITE if is_white else chess.BLACK
-        
-        # Rakip reytingini belirle
-        opp_info = first_state['black'] if is_white else first_state['white']
-        opponent_rating = opp_info.get('rating', 2500)
+        opponent_rating = 2500 # Varsayılan
+        is_white = True
+        my_color = chess.WHITE
 
+        # Tek bir stream üzerinden her şeyi halledelim
         for state in client.bots.stream_game_state(game_id):
             if state['type'] == 'gameFull':
+                # Bilgileri sadece oyun başında bir kez ayarla
+                is_white = state['white'].get('id') == my_id
+                my_color = chess.WHITE if is_white else chess.BLACK
+                opp_info = state['black'] if is_white else state['white']
+                opponent_rating = opp_info.get('rating', 2500)
                 curr_state = state['state']
             elif state['type'] == 'gameState':
                 curr_state = state
@@ -124,7 +131,8 @@ def main():
         print(f"HATA: config.yml okunamadı: {e}")
         return
 
-    bot = OxydanAegisV8(EXE_PATH)
+    uci_settings = config.get('engine', {}).get('uci_options', {})
+    bot = OxydanAegisV8(EXE_PATH, uci_options=uci_settings)
     session = berserk.TokenSession(TOKEN)
     client = berserk.Client(session=session)
     

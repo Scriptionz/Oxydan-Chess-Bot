@@ -33,9 +33,9 @@ class OxydanAegisV8:
         except Exception as e:
             print(f"KRİTİK HATA: C++ motoru başlatılamadı! Yol: {exe_path}\nHata: {e}")
             
-    def get_best_move(self, board):
-        # 1. ÖNCE KİTABA BAK (Eski robotun efsane açılışları için)
-        book_path = "./M11.2.bin" # Kitap yolun
+    def get_best_move(self, board, opponent_rating=2500, my_time=180000, increment=0):
+        # 1. ÖNCE KİTABA BAK
+        book_path = "./M11.2.bin"
         if os.path.exists(book_path):
             try:
                 with chess.polyglot.open_reader(book_path) as reader:
@@ -44,15 +44,26 @@ class OxydanAegisV8:
                         print(f"Kitap Hamlesi: {entry.move}")
                         return entry.move
             except Exception as e:
-                print(f"Kitap okunurken hata: {e}")
+                pass # Hata mesajını temizledik ki loglar şişmesin
 
-        # 2. KİTAPTA YOKSA C++ MOTORUNA SOR
+        # 2. DİNAMİK ZAMAN VE DERİNLİK HESABI (2800+ STRATEJİSİ)
         try:
-            # Süreyi 0.500 yapalım ki C++ daha derin düşünebilsin
-            result = self.engine.play(board, chess.engine.Limit(time=0.500))
+            # Temel süre: Eğer rakip 2750+ ise daha çok düşün
+            if opponent_rating >= 2750:
+                # Kalan sürenin %5'ini kullan veya en az 2 saniye düşün
+                # my_time milisaniye cinsinden gelir, saniyeye çeviriyoruz
+                calc_time = max(2.0, (my_time / 1000) * 0.05)
+                limit = chess.engine.Limit(time=calc_time, depth=24)
+                print(f"!!! KRİTİK RAKİP ({opponent_rating}): {calc_time:.2f}sn / 24 Derinlik")
+            elif opponent_rating >= 2500:
+                limit = chess.engine.Limit(time=1.0, depth=20)
+            else:
+                limit = chess.engine.Limit(time=0.5, depth=16)
+
+            result = self.engine.play(board, limit)
             return result.move
         except Exception as e:
-            print(f"Motor hatası: {e}. Yasal ilk hamle yapılıyor.")
+            print(f"Motor hatası: {e}")
             return list(board.legal_moves)[0]
 
     def quit(self):
@@ -61,37 +72,48 @@ class OxydanAegisV8:
 def handle_game(client, game_id, bot):
     try:
         my_id = client.account.get()['id']
-        client.bots.post_message(game_id, "Oxydan v8.0 C++ Core devrede. Hibrit zeka aktif.")
+        # Oyunun başında rakip reytingini alalım
+        game_full = client.bots.stream_game_state(game_id)
+        first_state = next(game_full)
         
+        is_white = first_state['white'].get('id') == my_id
+        my_color = chess.WHITE if is_white else chess.BLACK
+        
+        # Rakip reytingini belirle
+        opp_info = first_state['black'] if is_white else first_state['white']
+        opponent_rating = opp_info.get('rating', 2500)
+
         for state in client.bots.stream_game_state(game_id):
             if state['type'] == 'gameFull':
-                my_color = chess.WHITE if state['white'].get('id') == my_id else chess.BLACK
                 curr_state = state['state']
             elif state['type'] == 'gameState':
                 curr_state = state
             else:
                 continue
 
-            # Mevcut tahtayı güncelle
             board = chess.Board()
             moves = curr_state.get('moves', "")
             if moves:
                 for m in moves.split():
                     board.push_uci(m)
 
-            # Hamle sırası bizdeyse
             if board.turn == my_color and not board.is_game_over():
-                print(f"Oxydan (C++) Düşünüyor... Derinlik aranıyor.")
-                move = bot.get_best_move(board)
+                # --- SÜRE BİLGİSİNİ ÇEK ---
+                # Lichess süreyi milisaniye (ms) olarak gönderir
+                my_time = curr_state['wtime'] if is_white else curr_state['btime']
+                my_inc = curr_state['winc'] if is_white else curr_state['binc']
+
+                # Güncellenmiş fonksiyonu çağır
+                move = bot.get_best_move(board, opponent_rating, my_time, my_inc)
+                
                 if move:
                     client.bots.make_move(game_id, move.uci())
-                    print(f"Hamle yapıldı: {move.uci()}")
+                    print(f"Hamle: {move.uci()} (Kalan Süre: {my_time/1000:.1f}s)")
 
             if curr_state.get('status') in ['mate', 'resign', 'draw', 'outoftime']:
-                print("Oyun bitti.")
                 break
     except Exception as e:
-        print(f"Oyun sırasında hata: {e}")
+        print(f"Oyun hatası: {e}")
 
 def main():
     # 1. AYARLARI YÜKLE

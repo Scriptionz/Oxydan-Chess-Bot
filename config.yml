@@ -7,7 +7,7 @@ engine:
   protocol: "uci"
   uci_options:
     Threads: 2            # GitHub Actions (2 Core) için tam verim
-    Hash: 512             # 2800+ seviyesi için kritik. 256'dan 512'ye çıkardım (Daha derin analiz hafızası)
+    Hash: 128             # 2800+ seviyesi için kritik. 256'dan 512'ye çıkardım (Daha derin analiz hafızası)
     Move Overhead: 2000   # 2 saniye pay. Bot derin düşünürken internet lagı yüzünden süreyle kaybetmesin.
     Contempt: 20          # ÖNEMLİ: Botun beraberliği hemen kabul etmemesini, galibiyet için baskı yapmasını sağlar.
     # Syzygy Ayarları (Dosyaları eklediğinde burası hazır olacak)

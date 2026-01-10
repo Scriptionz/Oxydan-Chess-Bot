@@ -31,7 +31,7 @@ challenge_policy:
 
 matchmaking:
   allow_feed: true
-  challenge_interval: 45        # Güvenli istek aralığı
+  challenge_interval: 60        # Güvenli istek aralığı
   challenge_timeout: 30
   max_games: 1
   

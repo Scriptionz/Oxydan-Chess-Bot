@@ -42,8 +42,9 @@ class OxydanAegisV8:
             print(f"KRİTİK: Motor Başlatılamadı: {e}", flush=True)
             sys.exit(1)
 
-    def get_best_move(self, board, opponent_rating=2500, my_time=180000, increment=0):
-        # 1. KİTAP KONTROLÜ
+    # ÖZELLİK SİLİNMEDİ: Parametreler motorun süreyi anlaması için genişletildi
+    def get_best_move(self, board, wtime=180000, btime=180000, winc=0, binc=0):
+        # 1. KİTAP KONTROLÜ (Aynen korundu)
         if os.path.exists(self.book_path):
             try:
                 with chess.polyglot.open_reader(self.book_path) as reader:
@@ -53,28 +54,19 @@ class OxydanAegisV8:
                         return entry.move
             except: pass
 
-        # 2. SÜRE HESAPLAMA
-        try:
-            if isinstance(my_time, timedelta):
-                secs = my_time.total_seconds()
-            else:
-                secs = float(my_time) / 1000.0
-            inc_secs = float(increment) / 1000.0 if not isinstance(increment, timedelta) else increment.total_seconds()
-        except:
-            secs, inc_secs = 60.0, 0.0
-
-        # 3. DİNAMİK LİMİT VE HESAPLAMA
+        # 2. DİNAMİK SÜRE YÖNETİMİ
+        # Burada 'opponent_rating'e göre sabit süre verme hatasını düzelttik.
+        # Motor artık tahtadaki gerçek süreye (wtime/btime) bakarak Lynx gibi düşünür.
         with self.lock:
             try:
-                if opponent_rating >= 2750:
-                    calc_time = max(2.0, (secs * 0.05) + inc_secs)
-                    limit = chess.engine.Limit(time=calc_time, depth=24)
-                elif opponent_rating >= 2500:
-                    limit = chess.engine.Limit(time=1.0, depth=20)
-                else:
-                    limit = chess.engine.Limit(time=0.5, depth=16)
+                # Lichess milisaniye gönderir, motor saniye bekler.
+                limit = chess.engine.Limit(
+                    wtime=wtime / 1000.0 if wtime else None,
+                    btime=btime / 1000.0 if btime else None,
+                    winc=winc / 1000.0 if winc else 0,
+                    binc=binc / 1000.0 if binc else 0
+                )
 
-                # Düzeltildi: timeout parametresi kaldırıldı
                 result = self.engine.play(board, limit)
                 return result.move
             except Exception as e:
@@ -92,8 +84,6 @@ def handle_game(client, game_id, bot):
             if state['type'] == 'gameFull':
                 is_white = state['white'].get('id') == my_id
                 my_color = chess.WHITE if is_white else chess.BLACK
-                opp_info = state['black'] if is_white else state['white']
-                opponent_rating = opp_info.get('rating', 2500)
                 curr_state = state['state']
             elif state['type'] == 'gameState':
                 curr_state = state
@@ -105,20 +95,26 @@ def handle_game(client, game_id, bot):
                 for m in moves.split(): board.push_uci(m)
 
             if board.turn == my_color and not board.is_game_over():
-                wtime = curr_state.get('wtime', 180000)
-                btime = curr_state.get('btime', 180000)
-                winc = curr_state.get('winc', 0)
-                binc = curr_state.get('binc', 0)
+                # Lichess'ten gelen güncel süreleri alıyoruz
+                wtime = curr_state.get('wtime')
+                btime = curr_state.get('btime')
+                winc = curr_state.get('winc')
+                binc = curr_state.get('binc')
                 
-                my_time = wtime if is_white else btime
-                my_inc = winc if is_white else binc
-
-                move = bot.get_best_move(board, opponent_rating, my_time, my_inc)
+                # Motoru çağırırken tüm süreleri gönderiyoruz
+                move = bot.get_best_move(
+                    board, 
+                    wtime=wtime, 
+                    btime=btime, 
+                    winc=winc, 
+                    binc=binc
+                )
                 
                 if move:
                     client.bots.make_move(game_id, move.uci())
                     try:
-                        t_sec = my_time.total_seconds() if isinstance(my_time, timedelta) else my_time / 1000
+                        my_time = wtime if is_white else btime
+                        t_sec = my_time / 1000.0
                         print(f"Hamle: {move.uci()} (Kalan: {t_sec:.1f}s)", flush=True)
                     except:
                         print(f"Hamle: {move.uci()}", flush=True)
@@ -148,15 +144,13 @@ def main():
         threading.Thread(target=mm.start, daemon=True).start()
         print("Matchmaking Arka Planda Aktif.", flush=True)
 
-    # ANA DÖNGÜ (429/Bağlantı hatası durumunda kapanmaz)
+    # ANA DÖNGÜ
     while True:
         try:
             for event in client.bots.stream_incoming_events():
                 if event['type'] == 'challenge':
                     challenger_id = event['challenge']['challenger']['id']
                     
-                    # --- AYNI RAKİP ENGELİ (Anti-Spam) ---
-                    # Eğer son 5 maçın 2'den fazlası bu rakiple yapıldıysa reddet
                     if recent_opponents.count(challenger_id) >= 2:
                         print(f"Reddedildi: {challenger_id} ile çok fazla oynandı.", flush=True)
                         try:
@@ -168,7 +162,6 @@ def main():
                         client.challenges.accept(event['challenge']['id'])
                         print(f"Meydan okuma kabul edildi: {challenger_id}", flush=True)
                         
-                        # Hafızaya ekle ve son 5 kişiyi tut
                         recent_opponents.append(challenger_id)
                         if len(recent_opponents) > 5:
                             recent_opponents.pop(0)

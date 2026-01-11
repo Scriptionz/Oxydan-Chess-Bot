@@ -6,14 +6,13 @@ engine:
   name: "Ethereal"
   protocol: "uci"
   uci_options:
-    Threads: 2            # GitHub Actions (2 Core) için tam verim
-    Hash: 128             # 2800+ seviyesi için kritik. 256'dan 512'ye çıkardım (Daha derin analiz hafızası)
-    MoveOverhead: 2000   # 2 saniye pay. Bot derin düşünürken internet lagı yüzünden süreyle kaybetmesin.
+    Threads: 4            # GitHub Actions (2 Core) için tam verim
+    Hash: 256            # 2800+ seviyesi için kritik. 256'dan 512'ye çıkardım (Daha derin analiz hafızası)
+    MoveOverhead: 500   # 2 saniye pay. Bot derin düşünürken internet lagı yüzünden süreyle kaybetmesin.
     #Contempt: 20          # ÖNEMLİ: Botun beraberliği hemen kabul etmemesini, galibiyet için baskı yapmasını sağlar.
     # Syzygy Ayarları (Dosyaları eklediğinde burası hazır olacak)
     SyzygyPath: "./syzygy"
     SyzygyProbeDepth: 1
-    SyzygyProbeLimit: 6
 
 # --- SAVAŞ MODU AYARLARI ---
 
@@ -36,7 +35,7 @@ matchmaking:
   max_games: 1
   
   # --- ELO FİLTRESİ (PROFESYONEL AYAR) ---
-  opponent_min_rating: 2000     # 2600 puandasın, 2450 altı botları yenmek sana puan vermez ama risk yaratır.
+  opponent_min_rating: 1700     # 2600 puandasın, 2450 altı botları yenmek sana puan vermez ama risk yaratır.
   opponent_max_rating: 3200     # 3100'ü 3200 yaptım, en üst seviyedeki devleri de listeye ekleyelim.
   opponent_rating_difference: 500 # Kendi ligindeki ve üstündeki botlarla eşleşsin.
 

@@ -42,9 +42,9 @@ class OxydanAegisV8:
             print(f"KRİTİK: Motor Başlatılamadı: {e}", flush=True)
             sys.exit(1)
 
-    # ÖZELLİK SİLİNMEDİ: Parametreler motorun süreyi anlaması için genişletildi
+    # ÖZELLİK SİLİNMEDİ: Limit parametreleri kütüphane standartlarına göre güncellendi
     def get_best_move(self, board, wtime=180000, btime=180000, winc=0, binc=0):
-        # 1. KİTAP KONTROLÜ (Aynen korundu)
+        # 1. KİTAP KONTROLÜ
         if os.path.exists(self.book_path):
             try:
                 with chess.polyglot.open_reader(self.book_path) as reader:
@@ -55,16 +55,14 @@ class OxydanAegisV8:
             except: pass
 
         # 2. DİNAMİK SÜRE YÖNETİMİ
-        # Burada 'opponent_rating'e göre sabit süre verme hatasını düzelttik.
-        # Motor artık tahtadaki gerçek süreye (wtime/btime) bakarak Lynx gibi düşünür.
         with self.lock:
             try:
-                # Lichess milisaniye gönderir, motor saniye bekler.
+                # DÜZELTME: white_clock, black_clock, white_inc ve black_inc doğru isimlerdir.
                 limit = chess.engine.Limit(
-                    wtime=wtime / 1000.0 if wtime else None,
-                    btime=btime / 1000.0 if btime else None,
-                    winc=winc / 1000.0 if winc else 0,
-                    binc=binc / 1000.0 if binc else 0
+                    white_clock=wtime / 1000.0 if wtime else None,
+                    black_clock=btime / 1000.0 if btime else None,
+                    white_inc=winc / 1000.0 if winc else 0,
+                    black_inc=binc / 1000.0 if binc else 0
                 )
 
                 result = self.engine.play(board, limit)
@@ -95,13 +93,12 @@ def handle_game(client, game_id, bot):
                 for m in moves.split(): board.push_uci(m)
 
             if board.turn == my_color and not board.is_game_over():
-                # Lichess'ten gelen güncel süreleri alıyoruz
                 wtime = curr_state.get('wtime')
                 btime = curr_state.get('btime')
                 winc = curr_state.get('winc')
                 binc = curr_state.get('binc')
                 
-                # Motoru çağırırken tüm süreleri gönderiyoruz
+                # Motor parametreleri doğru sırayla gönderiliyor
                 move = bot.get_best_move(
                     board, 
                     wtime=wtime, 
@@ -144,7 +141,6 @@ def main():
         threading.Thread(target=mm.start, daemon=True).start()
         print("Matchmaking Arka Planda Aktif.", flush=True)
 
-    # ANA DÖNGÜ
     while True:
         try:
             for event in client.bots.stream_incoming_events():

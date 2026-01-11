@@ -19,7 +19,7 @@ engine:
 challenge_policy:
   accept_bot: true
   accept_human: true
-  rated: true
+  rated: false
   modes:
     - rated               # Puan kasmak için sadece rated maçlar
   time_controls:

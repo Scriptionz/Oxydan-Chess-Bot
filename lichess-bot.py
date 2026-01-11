@@ -17,12 +17,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 TOKEN = os.environ.get('LICHESS_TOKEN')
 EXE_PATH = "./src/Ethereal"
 
+# Anti-Spam için son rakipleri tutan liste
+recent_opponents = []
+
 class OxydanAegisV8:
     def __init__(self, exe_path, uci_options=None):
         self.exe_path = exe_path
         self.book_path = "./M11.2.bin"
-        self.lock = threading.Lock()  # ÇOK ÖNEMLİ: Aynı anda tek işlem için kilit
+        self.lock = threading.Lock()
         try:
+            # Motoru 15 saniye sınırıyla başlat
             self.engine = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=15)
             
             if uci_options:
@@ -59,8 +63,8 @@ class OxydanAegisV8:
         except:
             secs, inc_secs = 60.0, 0.0
 
-        # 3. DİNAMİK LİMİT BELİRLERME VE HESAPLAMA
-        with self.lock:  # Motoru o an sadece bu maçın kullanmasını sağlar
+        # 3. DİNAMİK LİMİT VE HESAPLAMA
+        with self.lock:
             try:
                 if opponent_rating >= 2750:
                     calc_time = max(2.0, (secs * 0.05) + inc_secs)
@@ -70,7 +74,7 @@ class OxydanAegisV8:
                 else:
                     limit = chess.engine.Limit(time=0.5, depth=16)
 
-                # DÜZELTİLDİ: 'timeout' parametresi kaldırıldı
+                # Düzeltildi: timeout parametresi kaldırıldı
                 result = self.engine.play(board, limit)
                 return result.move
             except Exception as e:
@@ -114,11 +118,7 @@ def handle_game(client, game_id, bot):
                 if move:
                     client.bots.make_move(game_id, move.uci())
                     try:
-                        # my_time'ın tipini kontrol ederek yazdırma
-                        if isinstance(my_time, timedelta):
-                            t_sec = my_time.total_seconds()
-                        else:
-                            t_sec = my_time / 1000
+                        t_sec = my_time.total_seconds() if isinstance(my_time, timedelta) else my_time / 1000
                         print(f"Hamle: {move.uci()} (Kalan: {t_sec:.1f}s)", flush=True)
                     except:
                         print(f"Hamle: {move.uci()}", flush=True)
@@ -129,7 +129,6 @@ def handle_game(client, game_id, bot):
         print(f"Oyun hatası: {e}", flush=True)
 
 def main():
-    # ... (main fonksiyonun geri kalanı aynı, değişiklik yok)
     try:
         with open("config.yml", "r") as f:
             config = yaml.safe_load(f)
@@ -142,28 +141,49 @@ def main():
     session = berserk.TokenSession(TOKEN)
     client = berserk.Client(session=session)
     
-    print("Oxydan v8.0 Hybrid Başlatıldı.", flush=True)
+    print("Oxydan v8.0 Hybrid Başlatıldı. 429 Koruması ve Anti-Spam Aktif.", flush=True)
 
     if config.get("matchmaking"):
         mm = Matchmaker(client, config) 
         threading.Thread(target=mm.start, daemon=True).start()
         print("Matchmaking Arka Planda Aktif.", flush=True)
 
-    try:
-        for event in client.bots.stream_incoming_events():
-            if event['type'] == 'challenge':
-                try:
-                    client.challenges.accept(event['challenge']['id'])
-                    print("Meydan okuma kabul edildi!", flush=True)
-                except: continue
-            elif event['type'] == 'gameStart':
-                # threading.Thread ekleyerek botun donmasını engelliyoruz
-                threading.Thread(target=handle_game, args=(client, event['game']['id'], bot)).start()
+    # ANA DÖNGÜ (429/Bağlantı hatası durumunda kapanmaz)
+    while True:
+        try:
+            for event in client.bots.stream_incoming_events():
+                if event['type'] == 'challenge':
+                    challenger_id = event['challenge']['challenger']['id']
+                    
+                    # --- AYNI RAKİP ENGELİ (Anti-Spam) ---
+                    # Eğer son 5 maçın 2'den fazlası bu rakiple yapıldıysa reddet
+                    if recent_opponents.count(challenger_id) >= 2:
+                        print(f"Reddedildi: {challenger_id} ile çok fazla oynandı.", flush=True)
+                        try:
+                            client.challenges.decline(event['challenge']['id'])
+                        except: pass
+                        continue
 
-    except Exception as e:
-        print(f"Ana döngü hatası: {e}", flush=True)
-    except KeyboardInterrupt:
-        bot.quit()
+                    try:
+                        client.challenges.accept(event['challenge']['id'])
+                        print(f"Meydan okuma kabul edildi: {challenger_id}", flush=True)
+                        
+                        # Hafızaya ekle ve son 5 kişiyi tut
+                        recent_opponents.append(challenger_id)
+                        if len(recent_opponents) > 5:
+                            recent_opponents.pop(0)
+                    except: 
+                        continue
+
+                elif event['type'] == 'gameStart':
+                    threading.Thread(target=handle_game, args=(client, event['game']['id'], bot)).start()
+
+        except Exception as e:
+            print(f"Bağlantı hatası (429 olabilir): {e}. 60 saniye sonra tekrar denenecek...", flush=True)
+            time.sleep(60)
+        except KeyboardInterrupt:
+            bot.quit()
+            break
 
 if __name__ == "__main__":
     main()

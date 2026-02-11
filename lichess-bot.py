@@ -39,29 +39,26 @@ class OxydanAegisV3:
         except: return 0.0
 
     def calculate_smart_time(self, t_ms, inc_ms):
-    t = self.to_seconds(t_ms)
-    
-    # DİNAMİK OVERHEAD: Süre azaldıkça lag payını daraltıyoruz.
-    # 5 saniyenin altında 100ms, üstünde 200ms koruma bırakır.
-    overhead = 0.100 if t < 5.0 else 0.200 
-    
-    # Dinamik Margin: Bullet (1 dk altı) ise daha agresif (0.75), 
-    # Zaman çok azsa (10 sn altı) daha da agresif (0.90) davranır.
-    if t < 10.0:
-        margin = 0.90  # Kritik saniyelerde sürenin %90'ını kullanabilirsin
-    elif t < 60.0:
-        margin = 0.75  # Bullet seviyesinde dengeli
-    else:
-        margin = 0.85  # Normal sürede güvenli
+        t = self.to_seconds(t_ms)
         
-    usable_time = (t - overhead) * margin
-    
-    # SON SANİYE SİGORTASI: 2 saniyenin altına düştüğünde
-    # Bot "pre-move" hızına geçer, sadece 300ms pay bırakır.
-    if t < 2.0: 
-        return max(0.1, t - 0.3)
+        # DİNAMİK OVERHEAD: Süre azaldıkça lag payını daraltıyoruz.
+        overhead = 0.100 if t < 5.0 else 0.200 
         
-    return max(0.1, usable_time)
+        # Dinamik Margin ayarları
+        if t < 10.0:
+            margin = 0.90  
+        elif t < 60.0:
+            margin = 0.75  
+        else:
+            margin = 0.85  
+            
+        usable_time = (t - overhead) * margin
+        
+        # SON SANİYE SİGORTASI: 2 saniyenin altı
+        if t < 2.0: 
+            return max(0.1, t - 0.3)
+            
+        return max(0.1, usable_time)
 
     def get_best_move(self, board, wtime, btime, winc, binc):
         # 1. Kitap Kontrolü

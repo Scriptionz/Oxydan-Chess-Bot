@@ -20,7 +20,6 @@ class OxydanAegisV3:
         self.book_path = "./M11.2.bin"
         self.lock = threading.Lock()
         try:
-            # Motoru başlatırken popen seviyesinde timeout veriyoruz
             self.engine = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=30)
             if uci_options:
                 for opt, val in uci_options.items():
@@ -32,39 +31,21 @@ class OxydanAegisV3:
             sys.exit(1)
 
     def to_seconds(self, t):
-        """Her türlü Lichess zaman verisini (ms, s, timedelta) güvenli saniyeye çevirir."""
         if t is None: return 0.0
-        # Eğer veri timedelta nesnesiyse direkt saniyeye çevir
-        if isinstance(t, timedelta):
-            return t.total_seconds()
+        if isinstance(t, timedelta): return t.total_seconds()
         try:
-            # Sayı veya string ise float yap ve 1000'den büyükse ms kabul et
             val = float(t)
             return val / 1000.0 if val > 1000 else val
-        except:
-            return 0.0
+        except: return 0.0
 
     def calculate_smart_time(self, t_ms, inc_ms):
-        """
-        Gecikme paylarını (lag) ve Python işlem süresini hesaba katar.
-        """
         t = self.to_seconds(t_ms)
-        
-        # --- GECİKME TELAFİSİ ---
-        # 150ms ağ ve işlemci yükü payı bırakıyoruz
-        overhead = 0.150 
-        
-        # Bullet (1dk altı) için %75, diğerleri için %85 güvenli marj
+        overhead = 0.200 # Lag payını biraz daha artırdık (200ms)
         is_bullet = t < 60
-        margin = 0.75 if is_bullet else 0.85 
-        
+        margin = 0.70 if is_bullet else 0.85 
         usable_time = (t - overhead) * margin
-        
-        # Kritik durumda (2sn altı) motora çok hızlı oynamasını söyle
-        if t < 2.0:
-            return max(0.05, t - 0.200)
-            
-        return max(0.05, usable_time)
+        if t < 2.0: return max(0.1, t - 0.3)
+        return max(0.1, usable_time)
 
     def get_best_move(self, board, wtime, btime, winc, binc):
         # 1. Kitap Kontrolü
@@ -75,35 +56,37 @@ class OxydanAegisV3:
                     if entry: return entry.move
             except: pass
 
-        # 2. Motor Hesaplama (Dinamik Limit)
+        # 2. Motor Hesaplama (Zırhlı Bölge)
         with self.lock:
             try:
-                # v3.1: Tüm zaman parametreleri to_seconds süzgecinden geçer
+                # Kendi süremizi hesaplayalım (timeout için)
+                my_t = wtime if board.turn == chess.WHITE else btime
+                my_inc = winc if board.turn == chess.WHITE else binc
+                safe_timeout = self.calculate_smart_time(my_t, my_inc) + 1.0 # +1 sn ek emniyet
+
                 limit = chess.engine.Limit(
                     white_clock=self.calculate_smart_time(wtime, winc),
                     black_clock=self.calculate_smart_time(btime, binc),
                     white_inc=self.to_seconds(winc),
                     black_inc=self.to_seconds(binc)
                 )
-                result = self.engine.play(board, limit)
+
+                # DÜZELTME: timeout parametresi eklendi. Motor takılırsa Python onu zorla durdurur.
+                result = self.engine.play(board, limit, timeout=safe_timeout)
                 return result.move
             except Exception as e:
-                print(f"Motor Hatası Detayı: {e}", flush=True)
-                # Acil durum hamlesi (zaman bitmesin diye)
+                print(f"!!! MOTOR TAKILDI VEYA HATA: {e} !!!", flush=True)
+                # Acil durum: İlk yasal hamleyi yap ki zamandan kaybetme
                 return list(board.legal_moves)[0] if board.legal_moves else None
 
 def handle_game(client, game_id, bot, my_id):
-    """v3: Her hamlede account.get() çağırmaz, my_id dışarıdan gelir."""
     try:
-        # 1.5 saniye beklemek yerine stream'i hemen başlatıp kontrol ediyoruz
         stream = client.bots.stream_game_state(game_id)
-        is_white = True
-        my_color = chess.WHITE
+        my_color = None
 
         for state in stream:
             if state['type'] == 'gameFull':
-                is_white = state['white'].get('id') == my_id
-                my_color = chess.WHITE if is_white else chess.BLACK
+                my_color = chess.WHITE if state['white'].get('id') == my_id else chess.BLACK
                 curr_state = state['state']
             elif state['type'] == 'gameState':
                 curr_state = state
@@ -114,13 +97,14 @@ def handle_game(client, game_id, bot, my_id):
             if moves:
                 for m in moves.split(): board.push_uci(m)
 
-            # Oyun bitti mi?
             if curr_state.get('status') in ['mate', 'resign', 'draw', 'outoftime', 'aborted']:
+                print(f"[{game_id}] Oyun bitti.", flush=True)
                 break
 
-            # Hamle sırası bizde mi?
             if board.turn == my_color and not board.is_game_over():
-                # v3: Hamle yapmadan önce son bir kez sırayı kontrol et (Bad Request önleyici)
+                # Hareket baslamadan önce log yazıyoruz ki nerede takıldığını görelim
+                print(f"[{game_id}] Oxydan dusunuyor...", flush=True)
+                
                 move = bot.get_best_move(
                     board, 
                     curr_state.get('wtime'), curr_state.get('btime'),
@@ -130,7 +114,9 @@ def handle_game(client, game_id, bot, my_id):
                 if move:
                     try:
                         client.bots.make_move(game_id, move.uci())
-                    except: pass 
+                        print(f"[{game_id}] Hamle yapildi: {move.uci()}", flush=True)
+                    except Exception as e:
+                        print(f"[{game_id}] Hamle gonderim hatasi: {e}", flush=True)
 
     except Exception as e:
         if "404" not in str(e):
@@ -144,7 +130,6 @@ def main():
         print("HATA: config.yml bulunamadı.")
         return
 
-    # Bot ID'sini bir kere al ve sakla (Hız kazandırır)
     session = berserk.TokenSession(TOKEN)
     client = berserk.Client(session=session)
     try:
@@ -161,7 +146,6 @@ def main():
         threading.Thread(target=mm.start, daemon=True).start()
 
     recent_opponents = []
-    
     while True:
         try:
             for event in client.bots.stream_incoming_events():
@@ -171,12 +155,9 @@ def main():
                         client.challenges.accept(event['challenge']['id'])
                         recent_opponents.append(challenger)
                         if len(recent_opponents) > 10: recent_opponents.pop(0)
-                
                 elif event['type'] == 'gameStart':
                     game_id = event['game']['id']
-                    # Thread'e my_id'yi de gönderiyoruz
                     threading.Thread(target=handle_game, args=(client, game_id, bot, my_id)).start()
-                    
         except Exception as e:
             time.sleep(5)
 

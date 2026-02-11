@@ -12,8 +12,8 @@ class Matchmaker:
         self.my_id = None
         
         # Elo Sınırları
-        self.min_rating = self.config.get("min_rating", 1500)
-        self.max_rating = self.config.get("max_rating", 3200)
+        self.min_rating = self.config.get("min_rating", 2000)
+        self.max_rating = self.config.get("max_rating", 4000)
         
         self.bot_pool = []
         self.blacklist = {}
@@ -143,7 +143,7 @@ class Matchmaker:
                     
                     self.client.challenges.create(
                         username=target,
-                        rated=False,#for test
+                        rated=True,#for test
                         clock_limit=t_limit * 60,
                         clock_increment=t_inc
                     )

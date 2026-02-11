@@ -41,6 +41,12 @@ jobs:
         run: |
           pip install -r requirements.txt
 
+      # --- YENİ ADIM: SİSTEM ÖN DENETİMİ ---
+      - name: Oxydan Self-Check (Mantıksal Denetim)
+        run: |
+          echo "🤖 Botun beyin fonksiyonları ve motor uyumu test ediliyor..."
+          python check_bot.py
+
       - name: Motor Test (UCI Testi)
         run: |
           # Botu başlatmadan önce motorun çalışıp çalışmadığını test edelim

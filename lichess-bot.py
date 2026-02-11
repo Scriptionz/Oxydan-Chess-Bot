@@ -31,33 +31,40 @@ class OxydanAegisV3:
             print(f"KRİTİK HATA: Motor başlatılamadı: {e}", flush=True)
             sys.exit(1)
 
-    def calculate_smart_time(self, t_ms, inc_ms, moves_made):
-        """
-        v3 Dinamik Zaman Yönetimi:
-        Lichess'ten gelen süreyi (ms) ağ gecikmesini hesaba katarak kırpar.
-        """
-        if t_ms is None: return 1.0
-        
-        # Saniyeye çevir
-        t = float(t_ms) / 1000.0 if isinstance(t_ms, (int, float, str)) else t_ms.total_seconds()
-        inc = float(inc_ms) / 1000.0 if inc_ms else 0.0
+    def to_seconds(self, t):
+        """Her türlü Lichess zaman verisini (ms, s, timedelta) güvenli saniyeye çevirir."""
+        if t is None: return 0.0
+        # Eğer veri timedelta nesnesiyse direkt saniyeye çevir
+        if isinstance(t, timedelta):
+            return t.total_seconds()
+        try:
+            # Sayı veya string ise float yap ve 1000'den büyükse ms kabul et
+            val = float(t)
+            return val / 1000.0 if val > 1000 else val
+        except:
+            return 0.0
 
-        # --- GECİKME TELAFİSİ (Lag Compensation) ---
-        # Her hamle için 100ms ağ gecikmesi + 50ms Python işlem yükü düşüyoruz.
+    def calculate_smart_time(self, t_ms, inc_ms):
+        """
+        Gecikme paylarını (lag) ve Python işlem süresini hesaba katar.
+        """
+        t = self.to_seconds(t_ms)
+        
+        # --- GECİKME TELAFİSİ ---
+        # 150ms ağ ve işlemci yükü payı bırakıyoruz
         overhead = 0.150 
         
-        # Eğer Bullet oynuyorsak (Süre < 120sn) daha agresif bir marj kullan
-        is_bullet = t < 120
-        margin = 0.85 if not is_bullet else 0.75 # Sürenin %75-85'ini kullan
+        # Bullet (1dk altı) için %75, diğerleri için %85 güvenli marj
+        is_bullet = t < 60
+        margin = 0.75 if is_bullet else 0.85 
         
-        # Kalan süreden overhead'i düş ve marjla çarp
         usable_time = (t - overhead) * margin
         
-        # Eğer çok az süremiz kaldıysa (panik modu) direkt 100ms içinde hamle yap
+        # Kritik durumda (2sn altı) motora çok hızlı oynamasını söyle
         if t < 2.0:
-            return max(0.1, t - 0.2)
+            return max(0.05, t - 0.200)
             
-        return max(0.1, usable_time)
+        return max(0.05, usable_time)
 
     def get_best_move(self, board, wtime, btime, winc, binc):
         # 1. Kitap Kontrolü
@@ -71,17 +78,18 @@ class OxydanAegisV3:
         # 2. Motor Hesaplama (Dinamik Limit)
         with self.lock:
             try:
-                moves_made = len(board.move_stack)
+                # v3.1: Tüm zaman parametreleri to_seconds süzgecinden geçer
                 limit = chess.engine.Limit(
-                    white_clock=self.calculate_smart_time(wtime, winc, moves_made),
-                    black_clock=self.calculate_smart_time(btime, binc, moves_made),
-                    white_inc=float(winc)/1000.0 if winc else 0,
-                    black_inc=float(binc)/1000.0 if binc else 0
+                    white_clock=self.calculate_smart_time(wtime, winc),
+                    black_clock=self.calculate_smart_time(btime, binc),
+                    white_inc=self.to_seconds(winc),
+                    black_inc=self.to_seconds(binc)
                 )
                 result = self.engine.play(board, limit)
                 return result.move
             except Exception as e:
-                print(f"Motor Hatası: {e}", flush=True)
+                print(f"Motor Hatası Detayı: {e}", flush=True)
+                # Acil durum hamlesi (zaman bitmesin diye)
                 return list(board.legal_moves)[0] if board.legal_moves else None
 
 def handle_game(client, game_id, bot, my_id):

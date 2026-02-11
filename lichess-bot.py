@@ -115,11 +115,18 @@ def handle_game(client, game_id, bot, my_id):
                 )
                 
                 if move:
-                    try:
-                        client.bots.make_move(game_id, move.uci())
-                        print(f"[{game_id}] Hamle yapildi: {move.uci()}", flush=True)
-                    except Exception as e:
-                        print(f"[{game_id}] Hamle gonderim hatasi: {e}", flush=True)
+                    # Hamleyi göndermek için 3 deneme hakkı veriyoruz
+                    for attempt in range(3):
+                        try:
+                            client.bots.make_move(game_id, move.uci())
+                            print(f"[{game_id}] Hamle yapildi: {move.uci()}", flush=True)
+                            break # Başarılıysa döngüden çık
+                        except Exception as e:
+                            print(f"[{game_id}] Hamle deneme {attempt+1} hatasi: {e}", flush=True)
+                            if attempt < 2:
+                                time.sleep(0.5) # Yarım saniye bekle ve tekrar dene
+                            else:
+                                print(f"[{game_id}] Hamle gönderimi TAMAMEN BAŞARISIZ.")
 
     except Exception as e:
         if "404" not in str(e):

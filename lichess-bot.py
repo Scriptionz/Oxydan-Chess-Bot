@@ -34,6 +34,18 @@ class OxydanAegisV8:
             sys.exit(1)
 
     def get_best_move(self, board, wtime, btime, winc, binc):
+        def parse_time(t):
+            """Her türlü zaman verisini güvenli bir saniyeye çevirir."""
+            if t is None: return 10.0 # Varsayılan 10 saniye
+            if isinstance(t, timedelta):
+                return t.total_seconds()
+            try:
+                # Milisaniye ise saniyeye çevir, saniye ise olduğu gibi bırak
+                val = float(t)
+                return val / 1000.0 if val > 1000 else val
+            except:
+                return 10.0
+
         # 1. Kitap Kontrolü
         if os.path.exists(self.book_path):
             try:
@@ -45,21 +57,19 @@ class OxydanAegisV8:
         # 2. Motor Hesaplama
         with self.lock:
             try:
-                # Lichess milisaniye gönderir, SimpleEngine saniye bekler.
-                # Değerleri 1000'e bölerek saniyeye çeviriyoruz.
+                # ZAMAN DÜZELTMESİ BURADA: parse_time kullanıyoruz
                 limit = chess.engine.Limit(
-                    white_clock=float(wtime) / 1000.0 if wtime is not None else 10.0,
-                    black_clock=float(btime) / 1000.0 if btime is not None else 10.0,
-                    white_inc=float(winc) / 1000.0 if winc is not None else 0.0,
-                    black_inc=float(binc) / 1000.0 if binc is not None else 0.0
+                    white_clock=parse_time(wtime),
+                    black_clock=parse_time(btime),
+                    white_inc=parse_time(winc),
+                    black_inc=parse_time(binc)
                 )
                 
-                # Timeout: Motor 30 saniye içinde yanıt vermezse Python çökmesin
-                result = self.engine.play(board, limit, timeout=30)
+                result = self.engine.play(board, limit, timeout=25)
                 return result.move
             except Exception as e:
-                print(f"Motor Hesaplama Hatası: {e}", flush=True)
-                # Acil durum hamlesi: Rastgele yasal hamle yap (Aborted olmasın)
+                # Burası o meşhur "rastgele hamle" kısmı. Motor hata verirse devreye girer.
+                print(f"Motor Hatası Detayı: {e}", flush=True)
                 return list(board.legal_moves)[0] if board.legal_moves else None
 
     def quit(self):
@@ -69,6 +79,13 @@ class OxydanAegisV8:
 
 def handle_game(client, game_id, bot):
     try:
+        # Oyunun gerçekten var olduğunu kontrol et
+        try:
+            game_full = client.bots.stream_game_state(game_id)
+        except Exception as e:
+            if "404" in str(e): return # Oyun bulunamadıysa thread'i sessizce kapat
+            raise e
+            
         my_id = client.account.get()['id']
         # Stream'i timeout ile başlatıyoruz
         stream = client.bots.stream_game_state(game_id)

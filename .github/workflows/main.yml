@@ -41,29 +41,30 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      # --- YENİ ADIM: SİSTEM ÖN DENETİMİ ---
       - name: Oxydan Self-Check (Mantıksal Denetim)
         run: |
           echo "🤖 Botun beyin fonksiyonları ve motor uyumu test ediliyor..."
           python check_bot.py
 
+      # Bu adım aslında Self-Check başarılıysa çalışır, ama garantiye alalım
       - name: Motor Test (UCI Testi)
+        if: success()
         run: |
-          # Botu başlatmadan önce motorun çalışıp çalışmadığını test edelim
           chmod +x ./src/Ethereal
           echo "uci" | ./src/Ethereal | grep "uciok" || (echo "MOTOR CALISMIYOR!" && exit 1)
           echo "Motor UCI testinden gecti."
 
       - name: Botu Baslat
+        if: success()
         env:
           LICHESS_TOKEN: ${{ secrets.LICHESS_TOKEN }}
         run: |
-          # Token yerleştirme
+          # Token yerleştirme (config.yml dosyanın ana dizinde olduğunu varsayıyoruz)
           sed -i "s/\$LICHESS_TOKEN/$LICHESS_TOKEN/g" config.yml
           
-          # KRİTİK: Python -u (Unbuffered) ekledik. Loglar anlık akacak.
           for i in {1..10}; do
             echo "Oxydan v8.0 Deneme $i/10..."
+            # Dosya adının tam doğru olduğundan emin ol (lichess-bot.py)
             python -u lichess-bot.py && break || echo "Bot kapandi, 5sn sonra tekrar..."
             sleep 5
           done

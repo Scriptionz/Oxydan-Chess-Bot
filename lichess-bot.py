@@ -56,28 +56,31 @@ class OxydanAegisV3:
                     if entry: return entry.move
             except: pass
 
-        # 2. Motor Hesaplama (Zırhlı Bölge)
+        # 2. Motor Hesaplama
         with self.lock:
             try:
-                # Kendi süremizi hesaplayalım (timeout için)
-                my_t = wtime if board.turn == chess.WHITE else btime
-                my_inc = winc if board.turn == chess.WHITE else binc
-                safe_timeout = self.calculate_smart_time(my_t, my_inc) + 1.0 # +1 sn ek emniyet
+                # Limitleri saniye cinsinden hesapla
+                wc = self.calculate_smart_time(wtime, winc)
+                bc = self.calculate_smart_time(btime, binc)
+                wi = self.to_seconds(winc)
+                bi = self.to_seconds(binc)
 
                 limit = chess.engine.Limit(
-                    white_clock=self.calculate_smart_time(wtime, winc),
-                    black_clock=self.calculate_smart_time(btime, binc),
-                    white_inc=self.to_seconds(winc),
-                    black_inc=self.to_seconds(binc)
+                    white_clock=wc,
+                    black_clock=bc,
+                    white_inc=wi,
+                    black_inc=bi
                 )
 
-                # DÜZELTME: timeout parametresi eklendi. Motor takılırsa Python onu zorla durdurur.
-                result = self.engine.play(board, limit, timeout=safe_timeout)
+                # DÜZELTME: timeout argümanını sildik. 
+                # Ethereal zaten verdiğimiz clock limitlerine göre kendini durduracaktır.
+                result = self.engine.play(board, limit)
                 return result.move
             except Exception as e:
-                print(f"!!! MOTOR TAKILDI VEYA HATA: {e} !!!", flush=True)
-                # Acil durum: İlk yasal hamleyi yap ki zamandan kaybetme
-                return list(board.legal_moves)[0] if board.legal_moves else None
+                print(f"!!! MOTOR HATASI: {e} !!!", flush=True)
+                # Acil durum: En iyi ikinci seçenek olarak tahtadaki ilk hamleyi yap
+                # Ama kale çekme döngüsüne girmemek için varsa ilk legal hamle:
+                return next(iter(board.legal_moves)) if board.legal_moves else None
 
 def handle_game(client, game_id, bot, my_id):
     try:

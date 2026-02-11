@@ -143,7 +143,7 @@ class Matchmaker:
                     
                     self.client.challenges.create(
                         username=target,
-                        rated=True,
+                        rated=False,#for test
                         clock_limit=t_limit * 60,
                         clock_increment=t_inc
                     )

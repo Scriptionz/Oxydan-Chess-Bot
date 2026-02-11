@@ -7,13 +7,12 @@ import time
 import chess.polyglot
 import threading
 import yaml
-import requests
 from datetime import timedelta
 from matchmaking import Matchmaker
 
 # --- AYARLAR ---
 TOKEN = os.environ.get('LICHESS_TOKEN')
-EXE_PATH = "./src/Ethereal"  # OxydanServer.exe kullanıyorsan yolu güncelle!
+EXE_PATH = "./OxydanServer.exe" # Veya "./src/Ethereal"
 
 class OxydanAegisV8:
     def __init__(self, exe_path, uci_options=None):
@@ -21,7 +20,7 @@ class OxydanAegisV8:
         self.book_path = "./M11.2.bin"
         self.lock = threading.Lock()
         try:
-            # Motorun yanıt vermesi için timeout süresini artırdık
+            # Motorun yanıt vermesi için popen aşamasında timeout kullanıyoruz
             self.engine = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=30)
             if uci_options:
                 for option_name, option_value in uci_options.items():
@@ -33,19 +32,22 @@ class OxydanAegisV8:
             print(f"KRİTİK: Motor Başlatılamadı: {e}", flush=True)
             sys.exit(1)
 
-    def get_best_move(self, board, wtime, btime, winc, binc):
-        def parse_time(t):
-            """Her türlü zaman verisini güvenli bir saniyeye çevirir."""
-            if t is None: return 10.0 # Varsayılan 10 saniye
-            if isinstance(t, timedelta):
-                return t.total_seconds()
-            try:
-                # Milisaniye ise saniyeye çevir, saniye ise olduğu gibi bırak
-                val = float(t)
-                return val / 1000.0 if val > 1000 else val
-            except:
-                return 10.0
+    def parse_time(self, t):
+        """Zaman verisini (timedelta, ms, s) güvenli bir saniyeye çevirir."""
+        if t is None: return 10.0
+        
+        # Loglardaki timedelta hatasını çözen kısım
+        if isinstance(t, timedelta):
+            return t.total_seconds()
+        
+        try:
+            val = float(t)
+            # Milisaniye ise saniyeye çevir (Lichess 180000 gönderirse 180 yapar)
+            return val / 1000.0 if val > 1000 else val
+        except:
+            return 10.0
 
+    def get_best_move(self, board, wtime, btime, winc, binc):
         # 1. Kitap Kontrolü
         if os.path.exists(self.book_path):
             try:
@@ -57,19 +59,19 @@ class OxydanAegisV8:
         # 2. Motor Hesaplama
         with self.lock:
             try:
-                # ZAMAN DÜZELTMESİ BURADA: parse_time kullanıyoruz
                 limit = chess.engine.Limit(
-                    white_clock=parse_time(wtime),
-                    black_clock=parse_time(btime),
-                    white_inc=parse_time(winc),
-                    black_inc=parse_time(binc)
+                    white_clock=self.parse_time(wtime),
+                    black_clock=self.parse_time(btime),
+                    white_inc=self.parse_time(winc),
+                    black_inc=self.parse_time(binc)
                 )
                 
-                result = self.engine.play(board, limit, timeout=25)
+                # DÜZELTME: 'timeout' parametresini kaldırdık, versiyon hatasını önler.
+                result = self.engine.play(board, limit)
                 return result.move
             except Exception as e:
-                # Burası o meşhur "rastgele hamle" kısmı. Motor hata verirse devreye girer.
                 print(f"Motor Hatası Detayı: {e}", flush=True)
+                # Rastgele değil, yasal ilk hamleyi yap (Bağlantı kopmasın diye)
                 return list(board.legal_moves)[0] if board.legal_moves else None
 
     def quit(self):
@@ -79,15 +81,10 @@ class OxydanAegisV8:
 
 def handle_game(client, game_id, bot):
     try:
-        # Oyunun gerçekten var olduğunu kontrol et
-        try:
-            game_full = client.bots.stream_game_state(game_id)
-        except Exception as e:
-            if "404" in str(e): return # Oyun bulunamadıysa thread'i sessizce kapat
-            raise e
-            
+        # Oyunun gerçekten var olduğunu kontrol et (404 koruması)
+        time.sleep(1.5) # Lichess'in oyunu oluşturması için kısa bir bekleme
+        
         my_id = client.account.get()['id']
-        # Stream'i timeout ile başlatıyoruz
         stream = client.bots.stream_game_state(game_id)
         
         for state in stream:
@@ -104,28 +101,26 @@ def handle_game(client, game_id, bot):
             if moves:
                 for m in moves.split(): board.push_uci(m)
 
-            # Oyun bitti mi kontrolü
             if curr_state.get('status') in ['mate', 'resign', 'draw', 'outoftime', 'aborted']:
                 print(f"Oyun Bitti. Durum: {curr_state.get('status')}", flush=True)
                 break
 
-            # Hamle sırası bizde mi?
             if board.turn == my_color and not board.is_game_over():
-                wtime = curr_state.get('wtime')
-                btime = curr_state.get('btime')
-                winc = curr_state.get('winc')
-                binc = curr_state.get('binc')
-                
-                move = bot.get_best_move(board, wtime, btime, winc, binc)
+                move = bot.get_best_move(
+                    board, 
+                    curr_state.get('wtime'), curr_state.get('btime'),
+                    curr_state.get('winc'), curr_state.get('binc')
+                )
                 
                 if move:
                     try:
                         client.bots.make_move(game_id, move.uci())
                     except Exception as move_err:
-                        print(f"Hamle Gönderilemedi: {move_err}", flush=True)
+                        print(f"Hamle Hatası: {move_err}", flush=True)
 
     except Exception as e:
-        print(f"Thread Hatası (GameID: {game_id}): {e}", flush=True)
+        if "404" not in str(e):
+            print(f"Thread Hatası (GameID: {game_id}): {e}", flush=True)
 
 def main():
     try:
@@ -136,10 +131,7 @@ def main():
         return
 
     bot = OxydanAegisV8(EXE_PATH, uci_options=config.get('engine', {}).get('uci_options', {}))
-    
-    # Oturumu daha dayanıklı hale getiriyoruz
-    session = berserk.TokenSession(TOKEN)
-    client = berserk.Client(session=session)
+    client = berserk.Client(session=berserk.TokenSession(TOKEN))
     
     print("Oxydan v8.0 Stabil Başlatıldı.", flush=True)
 
@@ -158,20 +150,16 @@ def main():
                         client.challenges.accept(event['challenge']['id'])
                         recent_opponents.append(challenger)
                         if len(recent_opponents) > 10: recent_opponents.pop(0)
-                    else:
-                        client.challenges.decline(event['challenge']['id'])
-
+                
                 elif event['type'] == 'gameStart':
-                    # Her oyun için ayrı thread
-                    game_thread = threading.Thread(
-                        target=handle_game, 
-                        args=(client, event['game']['id'], bot)
-                    )
-                    game_thread.start()
+                    # 404 Hatasını önlemek için thread başlatmadan önce minik bir bekleme
+                    game_id = event['game']['id']
+                    threading.Thread(target=handle_game, args=(client, game_id, bot)).start()
                     
         except Exception as e:
-            print(f"Bağlantı koptu, yeniden deneniyor: {e}", flush=True)
-            time.sleep(10)
+            if "404" not in str(e):
+                print(f"Bağlantı Hatası: {e}", flush=True)
+            time.sleep(5)
 
 if __name__ == "__main__":
     main()

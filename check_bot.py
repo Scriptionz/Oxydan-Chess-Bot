@@ -21,7 +21,6 @@ def run_diagnostic():
 
     try:
         # 3. Dinamik Olarak 'lichess-bot.py' dosyasını içe aktar
-        # (Dosya ismindeki '-' işareti yüzünden bu yöntem en güvenlisidir)
         spec = importlib.util.spec_from_file_location("lichess_bot_module", main_script)
         lichess_bot_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(lichess_bot_module)
@@ -41,14 +40,23 @@ def run_diagnostic():
         
         if move and move in board.legal_moves:
             print(f"✅ SUCCESS: Engine produced legal move: {move.uci()}")
-            sys.exit(0) # Her şey yolunda, GitHub Actions devam edebilir.
+            
+            # --- KRİTİK EKLEME: MOTORU KAPAT ---
+            # Motoru kapatmazsan GitHub Actions testi bitiremez, asılı kalır.
+            try:
+                bot.engine.quit()
+                print("✅ Engine shut down cleanly.")
+            except:
+                pass
+            # -----------------------------------
+            
+            sys.exit(0) 
         else:
             print("❌ ERROR: Engine failed to produce a valid move!")
             sys.exit(1)
             
     except Exception as e:
         print(f"❌ CRITICAL FAILURE during diagnostic: {e}")
-        # Hata detayını göster ki debug yapabilelim
         import traceback
         traceback.print_exc()
         sys.exit(1)

@@ -43,86 +43,75 @@ class OxydanAegisV3:
         t = self.to_seconds(t_ms)
         inc = self.to_seconds(inc_ms)
         
-        # 1. TAHTA ANALİZİ
-        piece_count = len(board.piece_map()) if board else 32
-        is_simple_endgame = piece_count <= 7 # Tablebase sınırına göre ayarlandı
+        # 1. KRİTİK EŞİK: 1 DAKİKA ALTI HIZLANMA
+        # 1 dakikadan fazla süremiz varsa (Rapid/Blitz başları)
+        if t > 60:
+            # Çok daha derin düşünme: t / 15 (5 dakikada ~20 saniye hamle başına)
+            base_alloc = (t / 15) + (inc * 0.7)
+            min_think = 1.0 # En az 1 saniye düşünerek kaliteyi koru
         
-        # 2. DİNAMİK OVERHEAD (Gecikme Kalkanı)
-        # Süre çok azaldığında (10sn altı) daha agresif bir koruma.
-        overhead = 0.120 if t < 10.0 else 0.180 
-        
-        # 3. YENİ ZAMAN ALGORİTMASI (Blitz Dostu)
-        if t < 5.0:
-            # "SON ÇARE": Sadece kaybetmemek için pre-move hızı
-            margin = 0.98
-            base_alloc = (inc * 0.8) if inc > 0 else (t * 0.10)
-        elif t < 20.0:
-            # "TURBO MOD": Hızlı oyna ama en azından bir derinliğe bak
-            margin = 0.95
-            base_alloc = (t / 40) + (inc * 0.8)
-        elif is_simple_endgame:
-            # "OYUN SONU": 7 taş altı zaten Tablebase'e soracak, burası Tablebase fail olursa çalışır
-            margin = 0.90
-            base_alloc = (t / 50) + (inc * 0.5)
-        else:
-            # "STRATEJİK MOD": Orta oyunda süreyi cömertçe kullan (t/30)
-            # 180 saniye için başlangıçta ~6 saniye verir.
-            margin = 0.92
-            base_alloc = (t / 30) + (inc * 0.7)
-
-        usable_time = (t - overhead) * margin
-        
-        # 4. KRİTİK DÜZELTME: Alt sınır (Min Düşünme)
-        # Botun en az 0.35 saniye düşünmesini sağlayarak depth 10-12 altına düşmesini engelleriz.
-        final_time = max(0.35, min(usable_time, base_alloc))
-
-        # 5. SON SANİYE SİGORTASI
-        if t < 1.5: 
-            return max(0.05, t - 0.20)
+        # 20 saniye ile 60 saniye arası (Vites yükseltme)
+        elif t > 20:
+            # t / 25 (1 dakikada ~2.4 saniye hamle başına)
+            base_alloc = (t / 25) + (inc * 0.8)
+            min_think = 0.5
             
-        return final_time
+        # 20 saniyenin altı (Panik modu / Pre-move hazırlığı)
+        else:
+            # t / 40 (Çok hızlı ama hala mantıklı)
+            base_alloc = (t / 40) + inc
+            min_think = 0.2
+
+        # 2. ÜST SINIR (Tek hamlede batmamak için)
+        # Hiçbir hamlede toplam sürenin %25'ini geçme
+        max_think = t * 0.25 
+
+        final_time = max(min_think, min(base_alloc, max_think))
+
+        # 3. GÜVENLİK SİGORTASI (Lag ve bağlantı için)
+        usable_total = max(0.05, t - 0.150)
         
+        return min(final_time, usable_total)
+
     def get_best_move(self, board, wtime, btime, winc, binc):
-        # 1. TABLEBASE KONTROLÜ (Lichess Cloud API)
+        # --- 1. KİTAP KONTROLÜ (Hemen Oynasın) ---
+        if os.path.exists(self.book_path):
+            try:
+                with chess.polyglot.open_reader(self.book_path) as reader:
+                    entry = reader.get(board)
+                    if entry: 
+                        print(f"📖 Kitap Hamlesi: {entry.move}", flush=True)
+                        return entry.move
+            except: pass
+
+        # --- 2. TABLEBASE KONTROLÜ (Hemen Oynasın) ---
         if len(board.piece_map()) <= 7:
             try:
                 fen = board.fen().replace(" ", "_")
-                r = requests.get(f"https://tablebase.lichess.ovh/standard?fen={fen}", timeout=0.5)
-                
+                # Timeout'u 0.3 saniyeye düşürdük ki hızlıca geçsin
+                r = requests.get(f"https://tablebase.lichess.ovh/standard?fen={fen}", timeout=0.3)
                 if r.status_code == 200:
                     data = r.json()
                     if "moves" in data and len(data["moves"]) > 0:
                         best_move_uci = data["moves"][0]["uci"]
                         print(f"☁️ Cloud Tablebase: {best_move_uci}", flush=True)
                         return chess.Move.from_uci(best_move_uci)
-            except Exception as e:
-                print(f"⚠️ Cloud TB pas geçildi: {e}", flush=True)
-
-        # 2. KİTAP KONTROLÜ (Açılış) - DİKKAT: Üstteki if ile aynı hizada olmalı!
-        if os.path.exists(self.book_path):
-            try:
-                with chess.polyglot.open_reader(self.book_path) as reader:
-                    entry = reader.get(board)
-                    if entry: return entry.move
             except: pass
 
-        # 3. MOTOR HESAPLAMA
+        # --- 3. MOTOR HESAPLAMA (Gelişmiş Zamanlama) ---
         with self.lock:
             try:
-                wc = self.calculate_smart_time(wtime, winc, board)
-                bc = self.calculate_smart_time(btime, binc, board)
-                wi = self.to_seconds(winc)
-                bi = self.to_seconds(binc)
-
-                limit = chess.engine.Limit(
-                    white_clock=wc, black_clock=bc,
-                    white_inc=wi, black_inc=bi
-                )
-
+                my_time = wtime if board.turn == chess.WHITE else btime
+                my_inc = winc if board.turn == chess.WHITE else binc
+                
+                think_time = self.calculate_smart_time(my_time, my_inc, board)
+                
+                # Motoru sadece süre ile kısıtlıyoruz ki o sürede en derine insun
+                limit = chess.engine.Limit(time=think_time)
+                
                 result = self.engine.play(board, limit)
                 return result.move
             except Exception as e:
-                print(f"!!! MOTOR HATASI: {e} !!!", flush=True)
                 return next(iter(board.legal_moves)) if board.legal_moves else None
                 
 def handle_game(client, game_id, bot, my_id):

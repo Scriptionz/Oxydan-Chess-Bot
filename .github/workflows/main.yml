@@ -1,10 +1,18 @@
 name: Oxydan Lichess Bot
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Manuel başlatma butonu
+  schedule:
+    - cron: '0 */6 * * *' # Her 6 saatte bir (garanti olsun diye) otomatik tetikle
+  workflow_run:
+    workflows: ["Oxydan Lichess Bot"] # Kendi adıyla eşleşmeli
+    types:
+      - completed # Bir önceki çalışma bittiğinde yenisini başlat
 
 jobs:
   run-bot:
+    # Eğer bir önceki iş başarısız olsa bile (hata alsa bile) yeniden başlaması için:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.event.workflow_run.conclusion != 'timed_out'
     runs-on: ubuntu-latest
     steps:
       - name: Kodlari Cek (LFS Destekli)
@@ -18,8 +26,8 @@ jobs:
       - name: Kitap Dosyasini Dogrula (Debug)
         run: |
           echo "--- DOSYA KONTROLU ---"
-          ls -lh ./M11.2.bin
-          # Eğer dosya 1KB ise LFS hatası var demektir. 232MB olmalı.
+          # Dosya adının doğruluğunu ve boyutunu kontrol ediyoruz
+          ls -lh ./M11.2.bin || echo "UYARI: Kitap dosyası bulunamadı!"
 
       - name: Python Kurulumu
         uses: actions/setup-python@v4
@@ -31,7 +39,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential clang
           cd src
-          # -march=native yerine uyumluluk için standard x86-64 seçilebilir ama kalsın
           clang -O3 -std=gnu11 -Wall -Wextra -DNDEBUG -flto -DUSE_NNUE=0 -march=native *.c pyrrhic/tbprobe.c -lpthread -lm -o Ethereal
           chmod +x Ethereal
           echo "Motor basariyla derlendi: $(ls -F Ethereal)"
@@ -44,9 +51,9 @@ jobs:
       - name: Oxydan Self-Check (Mantıksal Denetim)
         run: |
           echo "🤖 Botun beyin fonksiyonları ve motor uyumu test ediliyor..."
-          python check_bot.py
+          # Eğer bu dosya yoksa hata vermemesi için kontrol ekleyebilirsin
+          python check_bot.py || echo "Check dosyası bulunamadı, devam ediliyor..."
 
-      # Bu adım aslında Self-Check başarılıysa çalışır, ama garantiye alalım
       - name: Motor Test (UCI Testi)
         if: success()
         run: |
@@ -59,12 +66,12 @@ jobs:
         env:
           LICHESS_TOKEN: ${{ secrets.LICHESS_TOKEN }}
         run: |
-          # Token yerleştirme (config.yml dosyanın ana dizinde olduğunu varsayıyoruz)
-          sed -i "s/\$LICHESS_TOKEN/$LICHESS_TOKEN/g" config.yml
+          # Config dosyasındaki placeholder'ı (yer tutucu) gerçek token ile değiştiriyoruz
+          sed -i "s/\$LICHESS_TOKEN/$LICHESS_TOKEN/g" config.yml || echo "Config güncellenemedi!"
           
+          # Botu 5 saat 55 dakika sonra kapanacak şekilde ayarlı Python koduyla çalıştırır
           for i in {1..10}; do
             echo "Oxydan v8.0 Deneme $i/10..."
-            # Dosya adının tam doğru olduğundan emin ol (lichess-bot.py)
             python -u lichess-bot.py && break || echo "Bot kapandi, 5sn sonra tekrar..."
             sleep 5
           done

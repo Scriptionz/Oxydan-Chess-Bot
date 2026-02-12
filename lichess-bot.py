@@ -166,6 +166,9 @@ def handle_game(client, game_id, bot, my_id):
             print(f"Oyun Hatası ({game_id}): {e}", flush=True)
 
 def main():
+    # Botun tam başlangıç zamanını saniye olarak kaydet
+    start_time = time.time()
+    
     try:
         with open("config.yml", "r") as f:
             config = yaml.safe_load(f)
@@ -189,19 +192,49 @@ def main():
         threading.Thread(target=mm.start, daemon=True).start()
 
     recent_opponents = []
+    
+    # --- ANA DÖNGÜ (ZAMAN KONTROLLÜ) ---
     while True:
         try:
+            # Geçen süreyi hesapla (saniye cinsinden)
+            elapsed = time.time() - start_time
+            
+            # 5 saat 55 dakika (21300 saniye) dolduysa botu tamamen kapat
+            if elapsed > 21300:
+                print("🛑 KRİTİK ZAMAN: 6 saat sınırına ulaşıldı. Güvenli kapatma yapılıyor.", flush=True)
+                sys.exit(0)
+
+            # Lichess'ten gelen event'leri dinle
             for event in client.bots.stream_incoming_events():
+                # Her event geldiğinde süreyi tekrar kontrol et
+                current_elapsed = time.time() - start_time
+                
+                # 5 saat 45 dakika (20700 saniye) dolduysa yeni maç ALMAYI DURDUR
+                is_safe_to_start = current_elapsed < 20700
+
                 if event['type'] == 'challenge':
                     challenger = event['challenge']['challenger']['id']
-                    if recent_opponents.count(challenger) < 3:
-                        client.challenges.accept(event['challenge']['id'])
-                        recent_opponents.append(challenger)
-                        if len(recent_opponents) > 10: recent_opponents.pop(0)
+                    
+                    if is_safe_to_start:
+                        if recent_opponents.count(challenger) < 3:
+                            client.challenges.accept(event['challenge']['id'])
+                            recent_opponents.append(challenger)
+                            if len(recent_opponents) > 10: recent_opponents.pop(0)
+                    else:
+                        print(f"⚠️ Yeni maç reddedildi: Kapanışa az kaldı (Elapsed: {int(current_elapsed)}s)")
+                
                 elif event['type'] == 'gameStart':
                     game_id = event['game']['id']
                     threading.Thread(target=handle_game, args=(client, game_id, bot, my_id)).start()
+                
+                # Eğer süre kritik sınırı geçtiyse stream'den çık (yeni event bekleme)
+                if current_elapsed > 21300:
+                    break
+
         except Exception as e:
+            # Bağlantı koparsa veya hata olursa 5 saniye bekle ve devam et
+            if "current_elapsed" in locals() and current_elapsed > 21300:
+                sys.exit(0)
             time.sleep(5)
 
 if __name__ == "__main__":

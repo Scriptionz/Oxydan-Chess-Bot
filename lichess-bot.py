@@ -12,7 +12,7 @@ from matchmaking import Matchmaker
 
 # --- AYARLAR ---
 TOKEN = os.environ.get('LICHESS_TOKEN')
-EXE_PATH = "./src/Ethereal" 
+EXE_PATH = "./src/Ethereal"
 
 class OxydanAegisV3:
     def __init__(self, exe_path, uci_options=None):

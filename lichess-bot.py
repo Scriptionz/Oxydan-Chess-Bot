@@ -42,36 +42,51 @@ class OxydanAegisV3:
     def calculate_smart_time(self, t_ms, inc_ms, board=None):
         t = self.to_seconds(t_ms)
         inc = self.to_seconds(inc_ms)
+        move_num = board.fullmove_number if board else 1
         
-        # 1. KRİTİK EŞİK: 1 DAKİKA ALTI HIZLANMA
-        # 1 dakikadan fazla süremiz varsa (Rapid/Blitz başları)
-        if t > 60:
-            # Çok daha derin düşünme: t / 15 (5 dakikada ~20 saniye hamle başına)
-            base_alloc = (t / 15) + (inc * 0.7)
-            min_think = 1.0 # En az 1 saniye düşünerek kaliteyi koru
-        
-        # 20 saniye ile 60 saniye arası (Vites yükseltme)
-        elif t > 20:
-            # t / 25 (1 dakikada ~2.4 saniye hamle başına)
-            base_alloc = (t / 25) + (inc * 0.8)
-            min_think = 0.5
-            
-        # 20 saniyenin altı (Panik modu / Pre-move hazırlığı)
+        # --- 1. TAHMİNİ KALAN HAMLE SAYISI (MTG) ---
+        # Oyunun başında 40 hamle, sonuna doğru 15 hamle kalmış gibi davranır.
+        if move_num < 30:
+            estimated_moves_left = 40
+        elif move_num < 60:
+            estimated_moves_left = 30
         else:
-            # t / 40 (Çok hızlı ama hala mantıklı)
-            base_alloc = (t / 40) + inc
-            min_think = 0.2
+            estimated_moves_left = 20 # Oyun çok uzadı, seri oynamalı
 
-        # 2. ÜST SINIR (Tek hamlede batmamak için)
-        # Hiçbir hamlede toplam sürenin %25'ini geçme
-        max_think = t * 0.25 
+        # --- 2. TEMEL BÜTÇE HESABI ---
+        # Elimizdeki süreyi kalan tahmini hamle sayısına bölüyoruz.
+        # Artırımı (inc) bütçeye güvenli bir çarpanla ekliyoruz (lag payı için %80).
+        base_budget = (t / estimated_moves_left) + (inc * 0.8)
 
-        final_time = max(min_think, min(base_alloc, max_think))
+        # --- 3. KONUM KARMAŞIKLIĞI (HEURISTIC) ---
+        # Tahtada ne kadar çok yasal hamle varsa, o kadar karmaşıktır.
+        legal_moves_count = board.legal_moves.count() if board else 30
+        complexity_factor = 1.0
+        if legal_moves_count > 40: complexity_factor = 1.3 # Çok karışık, daha çok düşün
+        elif legal_moves_count < 15: complexity_factor = 0.7 # Basit konum, hızlı oyna
 
-        # 3. GÜVENLİK SİGORTASI (Lag ve bağlantı için)
-        usable_total = max(0.05, t - 0.150)
-        
-        return min(final_time, usable_total)
+        target_time = base_budget * complexity_factor
+
+        # --- 4. PANİK VE GÜVENLİK MODU ---
+        # Eğer maç artırımsızsa (3+0 gibi) ve süre 20 saniyenin altındaysa "Mermi" modu.
+        if inc == 0 and t < 20:
+            target_time = min(target_time, t / 40)
+            min_think = 0.05
+        # Eğer maç artırımlıysa, süreyi artırımın %95'i ile sınırla ki ana para eksilmesin.
+        elif inc > 0 and t < 15:
+            target_time = inc * 0.95
+            min_think = 0.1
+        else:
+            # Normal şartlarda min düşünme süresi kaliteyi korur.
+            min_think = 0.4 if t > 30 else 0.1
+
+        # --- 5. SON KONTROLLER (CLAMPING) ---
+        # Tek bir hamlede toplam sürenin %10'undan fazlasını asla harcama (Aşırı düşünmeyi önler).
+        max_limit = t * 0.12
+        final_time = max(min_think, min(target_time, max_limit))
+
+        # Sunucu gecikmesi (Lag) için son bir güvenlik payı.
+        return max(0.05, min(final_time, t - 0.2))
 
     def get_best_move(self, board, wtime, btime, winc, binc):
         # --- 1. KİTAP KONTROLÜ (Hemen Oynasın) ---

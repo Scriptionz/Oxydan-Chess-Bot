@@ -38,28 +38,49 @@ class OxydanAegisV3:
             return val / 1000.0 if val > 1000 else val
         except: return 0.0
 
-    def calculate_smart_time(self, t_ms, inc_ms):
+    def calculate_smart_time(self, t_ms, inc_ms, board=None):
         t = self.to_seconds(t_ms)
+        inc = self.to_seconds(inc_ms)
         
-        # DİNAMİK OVERHEAD: Süre azaldıkça lag payını daraltıyoruz.
-        overhead = 0.100 if t < 5.0 else 0.200 
+        # 1. TAHTA ANALİZİ: Karmaşıklığı ölçüyoruz
+        # Tahtada ne kadar az taş varsa (özellikle piyon oyun sonları), o kadar hızlı oynar.
+        piece_count = len(board.piece_map()) if board else 32
+        is_simple_endgame = piece_count <= 8 # 8 taş ve altı çok basit konumdur
         
-        # Dinamik Margin ayarları
-        if t < 10.0:
-            margin = 0.90  
-        elif t < 60.0:
-            margin = 0.75  
+        # 2. DİNAMİK OVERHEAD (Gecikme Kalkanı)
+        # 5 saniye altında risk alıp 80ms'ye düşüyoruz ki süre yetmeme hatası olmasın.
+        overhead = 0.080 if t < 5.0 else 0.150 
+        
+        # 3. ZAMAN DİLİMİ VE MARJ AYARLARI
+        if t < 5.0:
+            # "PANİK MODU": Sadece hayatta kalmaya odaklan.
+            margin = 0.95
+            # Artış (increment) varsa sadece onun %70'ini kullan, ana süren artsın.
+            base_alloc = (inc * 0.7) if inc > 0 else (t * 0.12)
+        elif t < 10.0:
+            # "TURBO MODU": Hızlı hamlelerle baskı kur.
+            margin = 0.90
+            base_alloc = (t * 0.08) + (inc * 0.6)
+        elif is_simple_endgame:
+            # "HIZLI OYUN SONU": Konum kolaysa Lynx gibi anında oyna.
+            margin = 0.85
+            base_alloc = (t * 0.03) + (inc * 0.4)
         else:
-            margin = 0.85  
-            
+            # NORMAL OYUN: Stratejik derinliği koru.
+            margin = 0.85
+            base_alloc = (t / 25) + (inc * 0.5)
+
         usable_time = (t - overhead) * margin
         
-        # SON SANİYE SİGORTASI: 2 saniyenin altı
-        if t < 2.0: 
-            return max(0.1, t - 0.3)
-            
-        return max(0.1, usable_time)
+        # Karmaşıklığa ve zamana göre en mantıklı süreyi seç
+        final_time = min(usable_time, base_alloc)
 
+        # 4. SON SANİYE SİGORTASI: 2 saniye altı "pre-move" hızı
+        if t < 2.0: 
+            return max(0.05, t - 0.25)
+            
+        return max(0.1, final_time)
+        
     def get_best_move(self, board, wtime, btime, winc, binc):
         # 1. Kitap Kontrolü
         if os.path.exists(self.book_path):
@@ -73,8 +94,10 @@ class OxydanAegisV3:
         with self.lock:
             try:
                 # Limitleri saniye cinsinden hesapla
-                wc = self.calculate_smart_time(wtime, winc)
-                bc = self.calculate_smart_time(btime, binc)
+                # board nesnesini buraya ekledik ki karmaşıklığı analiz edebilsin
+                wc = self.calculate_smart_time(wtime, winc, board)
+                bc = self.calculate_smart_time(btime, binc, board)
+                
                 wi = self.to_seconds(winc)
                 bi = self.to_seconds(binc)
 
@@ -85,14 +108,11 @@ class OxydanAegisV3:
                     black_inc=bi
                 )
 
-                # DÜZELTME: timeout argümanını sildik. 
-                # Ethereal zaten verdiğimiz clock limitlerine göre kendini durduracaktır.
+                # Motor hesaplamayı başlatır
                 result = self.engine.play(board, limit)
                 return result.move
             except Exception as e:
                 print(f"!!! MOTOR HATASI: {e} !!!", flush=True)
-                # Acil durum: En iyi ikinci seçenek olarak tahtadaki ilk hamleyi yap
-                # Ama kale çekme döngüsüne girmemek için varsa ilk legal hamle:
                 return next(iter(board.legal_moves)) if board.legal_moves else None
 
 def handle_game(client, game_id, bot, my_id):

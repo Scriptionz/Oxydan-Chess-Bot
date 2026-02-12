@@ -7,6 +7,7 @@ import time
 import chess.polyglot
 import threading
 import yaml
+import requests
 from datetime import timedelta
 from matchmaking import Matchmaker
 
@@ -82,7 +83,22 @@ class OxydanAegisV3:
         return max(0.1, final_time)
         
     def get_best_move(self, board, wtime, btime, winc, binc):
-        # 1. Kitap Kontrolü
+        # 1. TABLEBASE KONTROLÜ (Lichess Cloud API)
+        if len(board.piece_map()) <= 7:
+            try:
+                fen = board.fen().replace(" ", "_")
+                r = requests.get(f"https://tablebase.lichess.ovh/standard?fen={fen}", timeout=0.5)
+                
+                if r.status_code == 200:
+                    data = r.json()
+                    if "moves" in data and len(data["moves"]) > 0:
+                        best_move_uci = data["moves"][0]["uci"]
+                        print(f"☁️ Cloud Tablebase: {best_move_uci}", flush=True)
+                        return chess.Move.from_uci(best_move_uci)
+            except Exception as e:
+                print(f"⚠️ Cloud TB pas geçildi: {e}", flush=True)
+
+        # 2. KİTAP KONTROLÜ (Açılış) - DİKKAT: Üstteki if ile aynı hizada olmalı!
         if os.path.exists(self.book_path):
             try:
                 with chess.polyglot.open_reader(self.book_path) as reader:
@@ -90,31 +106,25 @@ class OxydanAegisV3:
                     if entry: return entry.move
             except: pass
 
-        # 2. Motor Hesaplama
+        # 3. MOTOR HESAPLAMA
         with self.lock:
             try:
-                # Limitleri saniye cinsinden hesapla
-                # board nesnesini buraya ekledik ki karmaşıklığı analiz edebilsin
                 wc = self.calculate_smart_time(wtime, winc, board)
                 bc = self.calculate_smart_time(btime, binc, board)
-                
                 wi = self.to_seconds(winc)
                 bi = self.to_seconds(binc)
 
                 limit = chess.engine.Limit(
-                    white_clock=wc,
-                    black_clock=bc,
-                    white_inc=wi,
-                    black_inc=bi
+                    white_clock=wc, black_clock=bc,
+                    white_inc=wi, black_inc=bi
                 )
 
-                # Motor hesaplamayı başlatır
                 result = self.engine.play(board, limit)
                 return result.move
             except Exception as e:
                 print(f"!!! MOTOR HATASI: {e} !!!", flush=True)
                 return next(iter(board.legal_moves)) if board.legal_moves else None
-
+                
 def handle_game(client, game_id, bot, my_id):
     try:
         stream = client.bots.stream_game_state(game_id)

@@ -43,44 +43,44 @@ class OxydanAegisV3:
         t = self.to_seconds(t_ms)
         inc = self.to_seconds(inc_ms)
         
-        # 1. TAHTA ANALİZİ: Karmaşıklığı ölçüyoruz
-        # Tahtada ne kadar az taş varsa (özellikle piyon oyun sonları), o kadar hızlı oynar.
+        # 1. TAHTA ANALİZİ
         piece_count = len(board.piece_map()) if board else 32
-        is_simple_endgame = piece_count <= 8 # 8 taş ve altı çok basit konumdur
+        is_simple_endgame = piece_count <= 7 # Tablebase sınırına göre ayarlandı
         
         # 2. DİNAMİK OVERHEAD (Gecikme Kalkanı)
-        # 5 saniye altında risk alıp 80ms'ye düşüyoruz ki süre yetmeme hatası olmasın.
-        overhead = 0.080 if t < 5.0 else 0.150 
+        # Süre çok azaldığında (10sn altı) daha agresif bir koruma.
+        overhead = 0.120 if t < 10.0 else 0.180 
         
-        # 3. ZAMAN DİLİMİ VE MARJ AYARLARI
+        # 3. YENİ ZAMAN ALGORİTMASI (Blitz Dostu)
         if t < 5.0:
-            # "PANİK MODU": Sadece hayatta kalmaya odaklan.
+            # "SON ÇARE": Sadece kaybetmemek için pre-move hızı
+            margin = 0.98
+            base_alloc = (inc * 0.8) if inc > 0 else (t * 0.10)
+        elif t < 20.0:
+            # "TURBO MOD": Hızlı oyna ama en azından bir derinliğe bak
             margin = 0.95
-            # Artış (increment) varsa sadece onun %70'ini kullan, ana süren artsın.
-            base_alloc = (inc * 0.7) if inc > 0 else (t * 0.12)
-        elif t < 10.0:
-            # "TURBO MODU": Hızlı hamlelerle baskı kur.
-            margin = 0.90
-            base_alloc = (t * 0.08) + (inc * 0.6)
+            base_alloc = (t / 40) + (inc * 0.8)
         elif is_simple_endgame:
-            # "HIZLI OYUN SONU": Konum kolaysa Lynx gibi anında oyna.
-            margin = 0.85
-            base_alloc = (t * 0.03) + (inc * 0.4)
+            # "OYUN SONU": 7 taş altı zaten Tablebase'e soracak, burası Tablebase fail olursa çalışır
+            margin = 0.90
+            base_alloc = (t / 50) + (inc * 0.5)
         else:
-            # NORMAL OYUN: Stratejik derinliği koru.
-            margin = 0.85
-            base_alloc = (t / 25) + (inc * 0.5)
+            # "STRATEJİK MOD": Orta oyunda süreyi cömertçe kullan (t/30)
+            # 180 saniye için başlangıçta ~6 saniye verir.
+            margin = 0.92
+            base_alloc = (t / 30) + (inc * 0.7)
 
         usable_time = (t - overhead) * margin
         
-        # Karmaşıklığa ve zamana göre en mantıklı süreyi seç
-        final_time = min(usable_time, base_alloc)
+        # 4. KRİTİK DÜZELTME: Alt sınır (Min Düşünme)
+        # Botun en az 0.35 saniye düşünmesini sağlayarak depth 10-12 altına düşmesini engelleriz.
+        final_time = max(0.35, min(usable_time, base_alloc))
 
-        # 4. SON SANİYE SİGORTASI: 2 saniye altı "pre-move" hızı
-        if t < 2.0: 
-            return max(0.05, t - 0.25)
+        # 5. SON SANİYE SİGORTASI
+        if t < 1.5: 
+            return max(0.05, t - 0.20)
             
-        return max(0.1, final_time)
+        return final_time
         
     def get_best_move(self, board, wtime, btime, winc, binc):
         # 1. TABLEBASE KONTROLÜ (Lichess Cloud API)

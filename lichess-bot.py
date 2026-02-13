@@ -228,25 +228,31 @@ def main():
                     challenge = event['challenge']
                     challenge_id = challenge['id']
                     
-                    # Zaman kontrolünü al
                     tc = challenge.get('timeControl', {})
-                    limit = tc.get('limit', 0)  # saniye cinsinden
+                    limit = tc.get('limit', 0)
                     
-                    # Mevcut maçları kontrol et
+                    current_elapsed = time.time() - start_time
+                    is_long_request = limit >= 600  # 10 dk ve üzeri (Rapid/Klasik)
+                    
+                    # 1. KURAL: 5. saatten sonra (18000 sn) asla uzun maç kabul etme
+                    if is_long_request and current_elapsed > 18000:
+                        client.challenges.decline(challenge_id, reason='later')
+                        print(f"🚫 5. saat doldu, uzun maç reddedildi: {challenge_id}")
+                        continue
+
+                    # 2. KURAL: Kapanışa 15 dk kala (20700 sn) hiçbir maçı kabul etme
+                    if current_elapsed > 20700:
+                        client.challenges.decline(challenge_id, reason='later')
+                        continue
+
+                    # 3. KURAL: Uzun maç slot kontrolü (Max 1 adet)
                     ongoing_games = client.games.get_ongoing()
                     long_game_count = sum(1 for g in ongoing_games if g['speed'] in ['rapid', 'classical'])
-                
-                    is_long_request = limit >= 600 # 10dk+ maçlar
-                
-                    # MANTIK: Uzun maç slotu doluysa veya süre güvenli değilse reddet
-                    if not is_time_safe:
+
+                    if is_long_request and long_game_count >= 1:
                         client.challenges.decline(challenge_id, reason='later')
-                    elif is_long_request and long_game_count >= 1:
-                        client.challenges.decline(challenge_id, reason='later')
-                        print(f"⚠️ Klasik/Rapid slotu dolu, reddedildi: {challenge_id}")
                     elif len(active_games) < 2:
                         client.challenges.accept(challenge_id)
-                        print(f"✅ Maç kabul edildi: {challenge_id}")
                     else:
                         client.challenges.decline(challenge_id, reason='later')
 

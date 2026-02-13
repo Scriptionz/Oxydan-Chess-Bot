@@ -45,27 +45,35 @@ def run_diagnostic():
         if move and move in board.legal_moves:
             print(f"✅ SUCCESS: Engine produced legal move: {move.uci()}")
             
-            # --- KRİTİK DEĞİŞİKLİK: HAVUZU BOŞALT VE MOTORLARI KAPAT ---
-            print("🧹 Cleaning up engine pool...")
+            # --- KRİTİK DEĞİŞİKLİK: HAVUZU GÜVENLİ BOŞALTMA ---
+            print("🧹 Cleaning up engine pool processes...")
+            
+            # Havuzdaki tüm motorları tek tek çek ve kapat
+            closed_engines = 0
             while not bot.engine_pool.empty():
                 try:
+                    # Motoru havuzdan al
                     engine = bot.engine_pool.get_nowait()
-                    engine.quit()
-                    print("✅ Bir motor başarıyla kapatıldı.")
-                except:
-                    pass
-            
+                    
+                    # Motorun kapanması için QUIT komutu gönder ve kısa bir süre bekle
+                    engine.quit() 
+                    closed_engines += 1
+                except Exception as e:
+                    print(f"⚠️ Bir motor kapatılırken hata oluştu: {e}")
+                finally:
+                    # Havuz mantığında her get() için task_done() çağırmak iyidir
+                    bot.engine_pool.task_done()
+
+            # İşletim sistemine motorların kapanması için zaman tanı
+            time.sleep(1) 
+            print(f"✅ {closed_engines} motor başarıyla kapatıldı ve süreçler temizlendi.")
             print("✅ Diagnostics passed. Ready for deployment.")
-            sys.exit(0) 
+            
+            # Başarılı çıkış - 0 koduyla çıkması sistemin botu başlatmasına izin verir
+            os._exit(0)  # sys.exit yerine os._exit bazen thread'leri daha temiz öldürür
         else:
             print("❌ ERROR: Engine failed to produce a valid move!")
             sys.exit(1)
-            
-    except Exception as e:
-        print(f"❌ CRITICAL FAILURE during diagnostic: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
 
 if __name__ == "__main__":
     run_diagnostic()

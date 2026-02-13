@@ -15,7 +15,7 @@ class Matchmaker:
         # Elo Sınırları
         self.min_rating = self.config.get("min_rating", 2000)
         self.max_rating = self.config.get("max_rating", 4000)
-        self.max_parallel_games = 3 # v4 için eş zamanlı maç sınırı
+        self.max_parallel_games = 2 # v4 için eş zamanlı maç sınırı
         
         self.bot_pool = []
         self.blacklist = {}
@@ -123,7 +123,7 @@ class Matchmaker:
                 # 1. DEĞİŞİKLİK: Yerel slot kontrolü (API'yi yormaz)
                 # Eğer 3 maç da doluysa yeni maç arama, bekle.
                 if len(self.active_games) >= self.max_parallel_games:
-                    time.sleep(30) 
+                    time.sleep(45) 
                     continue
 
                 # 2. Hedef bul

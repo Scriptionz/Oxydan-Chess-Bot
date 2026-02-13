@@ -6,38 +6,44 @@ engine:
   name: "Ethereal"
   protocol: "uci"
   uci_options:
-    Threads: 2            # GitHub Actions (2 Core) için tam verim
-    Hash: 512            # 2800+ seviyesi için kritik. 256'dan 512'ye çıkardım (Daha derin analiz hafızası)
-    MoveOverhead: 1000   # 2 saniye pay. Bot derin düşünürken internet lagı yüzünden süreyle kaybetmesin.
-    #Contempt: 20          # ÖNEMLİ: Botun beraberliği hemen kabul etmemesini, galibiyet için baskı yapmasını sağlar.
-    # Syzygy Ayarları (Dosyaları eklediğinde burası hazır olacak)
+    Threads: 1            # 2 motor için toplam 2 thread (2 çekirdekli sistemde her motora 1 saf çekirdek)
+    Hash: 256             # 2 motor x 256MB = 512MB RAM. Hafıza derinliği için ideal.
+    MoveOverhead: 2000    # Lag koruması. Uzun maçlarda (30+0) risk almamak için 2 saniye pay.
+    Ponder: false         # Rakip düşünürken CPU'yu yormasın, diğer motorun performansını çalmasın.
     SyzygyPath: "./syzygy"
     SyzygyProbeDepth: 1
 
-# --- SAVAŞ MODU AYARLARI ---
+# --- SOSYAL AYARLAR ---
+chat:
+  welcome: "Hi! Oxydan v6 actived. Be ready for a great game :)"
+  goodbye: "GG! See you later."
 
+# --- SAVAŞ MODU (GELEN MEYDAN OKUMALAR) ---
 challenge_policy:
   accept_bot: true
   accept_human: true
-  rated: false
+  rated: true
   modes:
-    - rated               # Puan kasmak için sadece rated maçlar
+    - rated
   time_controls:
     - bullet
     - blitz
+    - rapid
+    - classical
   min_time: 60
-  max_time: 300           # Blitz ve Bullet uzmanlığını sürdürsün
+  max_time: 2000          # 30+0 gibi uzun maçları da kabul edebilmesi için yükseltildi
 
+# --- MATCHMAKING (BİZİM MEYDAN OKUMALARIMIZ) ---
 matchmaking:
   allow_feed: true
-  challenge_interval: 45        # Güvenli istek aralığı
+  challenge_interval: 60  # Daha ağırbaşlı ve seçici maç arama aralığı
   challenge_timeout: 30
-  max_games: 1
+  max_games: 2            # 2 motorlu sistemin ana sınırı
   
-  # --- ELO FİLTRESİ (PROFESYONEL AYAR) ---
-  opponent_min_rating: 1700     # 2600 puandasın, 2450 altı botları yenmek sana puan vermez ama risk yaratır.
-  opponent_max_rating: 3200     # 3100'ü 3200 yaptım, en üst seviyedeki devleri de listeye ekleyelim.
-  opponent_rating_difference: 500 # Kendi ligindeki ve üstündeki botlarla eşleşsin.
+  # --- ELO KORUMA FİLTRESİ ---
+  opponent_min_rating: 2500      # 2735 puandasın, alt seviyeyle puan kaybetme riskini sıfırlıyoruz
+  opponent_max_rating: 3500      # En üst seviyedeki devleri hedefliyoruz
+  opponent_rating_difference: 400 
 
   time_controls:
     - "1+0"
@@ -45,6 +51,11 @@ matchmaking:
     - "3+0"
     - "3+2"
     - "5+0"
+    - "5+2"
+    - "10+0"              # Rapid puanı için
+    - "10+2"              # Rapid puanı için
+    - "30+0"              # Klasik puanı için
+    
   challenge_bots: true
   challenge_humans: false
-  selection: "random"           # Manipülasyon olarak algılanmaması için en güvenli yöntem.
+  selection: "random"

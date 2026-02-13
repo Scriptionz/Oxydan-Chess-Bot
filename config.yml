@@ -46,15 +46,16 @@ matchmaking:
   opponent_rating_difference: 400 
 
   time_controls:
-    - "1+0"
+    - "1+0"  # Çok Sık
+    - "1+1"
     - "2+1"
-    - "3+0"
+    - "3+0"  # Sık
     - "3+2"
     - "5+0"
     - "5+2"
-    - "10+0"              # Rapid puanı için
-    - "10+2"              # Rapid puanı için
-    - "30+0"              # Klasik puanı için
+    - "10+0" # Nadir (Rapid)
+    - "10+2"
+    - "30+0" # En Nadir (Klasik)
     
   challenge_bots: true
   challenge_humans: false

@@ -118,50 +118,50 @@ class Matchmaker:
             print("[Matchmaker] Devre dışı.")
             return
 
-        # Botun başlangıç zamanını kaydet (5. saat kontrolü için)
         start_time = time.time()
 
         while True:
             try:
-                # 1. Slot Kontrolü (2 motor/slot sınırı)
+                # 1. SERT SLOT KONTROLÜ (Daha disiplinli)
+                # Aktif oyun sayısı sınırı aşmışsa veya sınıra çok yakınsa bekle
                 if len(self.active_games) >= self.max_parallel_games:
+                    # Slot dolu, agresifliği sıfıra indir
                     time.sleep(30) 
                     continue
 
-                # 2. Çalışma Süresi Kontrolü
+                # 2. Çalışma Süresi Kontrolü (6 saat sınırına yaklaştıysan dur)
                 elapsed = time.time() - start_time
-                
+                if elapsed > 20700: # 5 saat 45 dakika
+                    print("[Matchmaker] Kapanış saati yaklaştı, yeni maç aranmıyor.")
+                    time.sleep(600)
+                    continue
+
                 # 3. Hedef rakip bul
                 target = self._get_valid_target()
                 if not target:
-                    print("[Matchmaker] Uygun rakip bulunamadı, bekleniyor...")
                     time.sleep(60)
                     continue
 
-                # --- DICE (ZAR) MANTIĞI İLE ZAMAN KONTROLÜ SEÇİMİ ---
-                # Klasik < Rapid < Blitz/Bullet hiyerarşisi
+                # --- ZAMAN KONTROLÜ SEÇİMİ (Mevcut mantık korundu) ---
                 dice = random.random()
-                
-                # 5. saatten (18000 sn) sonra sadece Bullet/Blitz seç
-                if elapsed > 18000:
-                    tc = random.choice(["1+0", "2+1", "3+0", "3+2", "5+0"])
-                    if dice < 0.10: # %10 şansla log yazdır
-                        print("[Matchmaker] 5. saat doldu, sadece hızlı maçlar aranıyor.")
+                if elapsed > 18000: # 5. saatten sonra sadece hızlı
+                    tc_list = ["1+0", "2+1", "3+0"]
                 else:
-                    # Normal olasılık dağılımı
-                    if dice < 0.05:    # %5 şans: Klasik
-                        tc = "30+0"
-                    elif dice < 0.20:  # %15 şans: Rapid
-                        tc = random.choice(["10+0", "10+2"])
-                    else:              # %80 şans: Bullet/Blitz
-                        tc = random.choice(["1+0", "2+1", "3+0", "3+2", "5+0", "5+2"])
-
-                # 4. Seçilen TC'yi ayrıştır
+                    if dice < 0.05: tc_list = ["30+0"]
+                    elif dice < 0.20: tc_list = ["10+0", "10+2"]
+                    else: tc_list = ["1+0", "2+1", "3+0", "3+2", "5+0", "5+2"]
+                
+                tc = random.choice(tc_list)
                 t_limit, t_inc = map(int, tc.split('+'))
+
+                # 4. MEYDAN OKUMA ÖNCESİ SON KONTROL
+                # Tam bu satırda 2. maç başlamış olabilir, tekrar kontrol et
+                if len(self.active_games) >= self.max_parallel_games:
+                    continue
 
                 # 5. Meydan oku
                 try:
-                    # Rakibi geçici olarak engelle ki sürekli aynı bota sarmasın
+                    # Rakibi 1 saatliğine kara listeye al (spam yapmamak için)
                     self.blacklist[target] = datetime.now() + timedelta(minutes=60)
                     
                     self.client.challenges.create(
@@ -170,17 +170,18 @@ class Matchmaker:
                         clock_limit=t_limit * 60,
                         clock_increment=t_inc
                     )
-                    print(f"[Matchmaker] -> {target} ({tc}) Meydan okuma gönderildi. [Zar: {dice:.2f}]")
+                    print(f"[Matchmaker] -> {target} ({tc}) Gönderildi. Slot: {len(self.active_games)}/2")
                     
-                    # Slotları doldurmak için bekleme süresi
-                    time.sleep(random.randint(25, 50))
+                    # --- KRİTİK DEĞİŞİKLİK: CHALLENGE SONRASI UYKU ---
+                    # Meydan okuma gönderdikten sonra Lichess'in ve rakibin nefes almasına izin ver.
+                    # Eğer hemen döngüye girerse 2. ve 3. meydan okumayı gönderir ve abort riski doğar.
+                    time.sleep(60) # Karşı tarafın kabul etmesi için 1 dakika bekleme alanı
 
                 except Exception as e:
                     if "429" in str(e): 
                         self._handle_rate_limit(e)
                     else:
-                        print(f"[Matchmaker] Meydan okuma reddedildi/hata: {target}")
-                        self.blacklist[target] = datetime.now() + timedelta(hours=3)
+                        print(f"[Matchmaker] Hata: {target} için challenge gönderilemedi.")
                         time.sleep(10)
 
             except Exception as e:

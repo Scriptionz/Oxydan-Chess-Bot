@@ -4,21 +4,23 @@ import itertools
 from datetime import datetime, timedelta
 
 class Matchmaker:
-    def __init__(self, client, config):
+    def __init__(self, client, config, active_games): 
         self.client = client
         self.config_all = config
         self.config = config.get("matchmaking", {})
         self.enabled = self.config.get("allow_feed", True)
+        self.active_games = active_games  # Ana koddaki set'e referans
         self.my_id = None
         
         # Elo Sınırları
         self.min_rating = self.config.get("min_rating", 2000)
         self.max_rating = self.config.get("max_rating", 4000)
+        self.max_parallel_games = 3 # v4 için eş zamanlı maç sınırı
         
         self.bot_pool = []
         self.blacklist = {}
         self.last_pool_update = 0
-        self.pool_timeout = 3600 # Liste güncelleme süresini 1 saate çıkardık (API dostu)
+        self.pool_timeout = 3600 
         self.consecutive_429s = 0
 
         self._initialize_id()
@@ -118,10 +120,10 @@ class Matchmaker:
 
         while True:
             try:
-                # 1. Devam eden maç kontrolü (Lichess botları genelde 1 maç sınırı koyar)
-                ongoing = self.client.games.get_ongoing()
-                if len(ongoing) >= self.config.get("max_games", 1):
-                    time.sleep(45) # Maçın bitmesini bekle
+                # 1. DEĞİŞİKLİK: Yerel slot kontrolü (API'yi yormaz)
+                # Eğer 3 maç da doluysa yeni maç arama, bekle.
+                if len(self.active_games) >= self.max_parallel_games:
+                    time.sleep(30) 
                     continue
 
                 # 2. Hedef bul
@@ -138,27 +140,29 @@ class Matchmaker:
 
                 # 4. Meydan oku
                 try:
-                    # Meydan okumadan hemen önce kara listeye ekle (spam engeli)
+                    # Spam engeli için hemen listeye al
                     self.blacklist[target] = datetime.now() + timedelta(minutes=120)
                     
                     self.client.challenges.create(
                         username=target,
-                        rated=True,#for test
+                        rated=True,
                         clock_limit=t_limit * 60,
                         clock_increment=t_inc
                     )
                     print(f"[Matchmaker] -> {target} ({tc}) Meydan okuma gönderildi.")
                     
-                    # Bir sonraki meydan okuma için uzun bekle (İnsan taklidi)
-                    time.sleep(random.randint(180, 400))
+                    # 3. DEĞİŞİKLİK: Maç arama aralığını kısalttık
+                    # Artık 3 slotumuz olduğu için bir maç gönderdikten sonra 
+                    # diğer slotları doldurmak için çok uzun beklemeye gerek yok.
+                    time.sleep(random.randint(20, 45))
 
                 except Exception as e:
                     if "429" in str(e): 
                         self._handle_rate_limit(e)
                     else:
-                        print(f"[Matchmaker] Meydan okuma reddedildi/hatalı: {target}")
+                        print(f"[Matchmaker] Meydan okuma hatası: {target}")
                         self.blacklist[target] = datetime.now() + timedelta(hours=6)
-                        time.sleep(30)
+                        time.sleep(10)
 
             except Exception as e:
                 self._handle_rate_limit(e)

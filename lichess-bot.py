@@ -198,13 +198,14 @@ def main():
     bot = OxydanAegisV4(EXE_PATH, uci_options=config.get('engine', {}).get('uci_options', {}))
     print(f"🚀 Oxydan v4 Stabil Başlatıldı. ID: {my_id}", flush=True)
 
-    if config.get("matchmaking"):
-        mm = Matchmaker(client, config)
-        threading.Thread(target=mm.start, daemon=True).start()
-
     # --- YENİ: ÇOKLU OYUN TAKİBİ ---
-    active_games = set()
+    active_games = set() # Bu satırı Matchmaker'dan ÖNCEYE çekmelisin
     recent_opponents = []
+    
+    if config.get("matchmaking"):
+        # Matchmaker'a active_games set'ini de gönderiyoruz
+        mm = Matchmaker(client, config, active_games) 
+        threading.Thread(target=mm.start, daemon=True).start()
     
     # --- ANA DÖNGÜ ---
     while True:

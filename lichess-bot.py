@@ -26,14 +26,14 @@ class OxydanAegisV4:
         self.engine_pool = queue.Queue()
         
         try:
-            for i in range(3):
+            for i in range(2):
                 eng = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=30)
                 if uci_options:
                     for opt, val in uci_options.items():
                         try: eng.configure({opt: val})
                         except: pass
                 self.engine_pool.put(eng)
-            print(f"🚀 Oxydan v4 Aktif: 3 Bağımsız Motor Ünitesi Hazır.", flush=True)
+            print(f"🚀 Oxydan v4 Aktif: 2 Bağımsız Motor Ünitesi Hazır.", flush=True)
         except Exception as e:
             print(f"KRİTİK HATA: Motorlar başlatılamadı: {e}", flush=True)
             sys.exit(1)
@@ -123,6 +123,7 @@ class OxydanAegisV4:
                 
 def handle_game(client, game_id, bot, my_id):
     try:
+        client.bots.post_message(game_id, "Hi! Oxydan v6 says Goodluck!")
         stream = client.bots.stream_game_state(game_id)
         my_color = None
         board = chess.Board() # Tahtayı döngü DIŞINDA oluşturuyoruz
@@ -148,6 +149,7 @@ def handle_game(client, game_id, bot, my_id):
                 continue
 
             if curr_state.get('status') in ['mate', 'resign', 'draw', 'outoftime', 'aborted']:
+                client.bots.post_message(game_id, "GG! See you later.")
                 print(f"[{game_id}] Oyun bitti.", flush=True)
                 break
 
@@ -209,7 +211,7 @@ def main():
         try:
             elapsed = time.time() - start_time
             
-            # 5 saat 55 dakika dolduysa tamamen kapat
+            # 5 saat 55 dakika dolduysa tamamen kapat (Güvenli çıkış)
             if elapsed > 21300:
                 print("🛑 KRİTİK ZAMAN: 6 saat sınırına ulaşıldı. Kapatılıyor.", flush=True)
                 sys.exit(0)
@@ -221,39 +223,52 @@ def main():
                 # Kapanışa yakın yeni maç almayı durdur (5s 45dk)
                 is_time_safe = current_elapsed < 20700
 
+                # 1. MEYDAN OKUMA KONTROLÜ (Challenge)
                 if event['type'] == 'challenge':
-                    challenger = event['challenge']['challenger']['id']
-                    challenge_id = event['challenge']['id']
+                    challenge = event['challenge']
+                    challenge_id = challenge['id']
                     
-                    # KOŞULLAR: Zaman güvenli mi? + Slot boş mu (max 3)? + Aynı rakip sınırı?
-                    if is_time_safe and len(active_games) < 3:
-                        if recent_opponents.count(challenger) < 3:
-                            client.challenges.accept(challenge_id)
-                            recent_opponents.append(challenger)
-                            if len(recent_opponents) > 10: recent_opponents.pop(0)
-                        else:
-                            client.challenges.decline(challenge_id, reason='later')
-                    else:
-                        # Slot doluysa veya zaman azsa reddet
-                        client.challenges.decline(challenge_id, reason='later')
+                    # Zaman kontrolünü al
+                    tc = challenge.get('timeControl', {})
+                    limit = tc.get('limit', 0)  # saniye cinsinden
+                    
+                    # Mevcut maçları kontrol et
+                    ongoing_games = client.games.get_ongoing()
+                    long_game_count = sum(1 for g in ongoing_games if g['speed'] in ['rapid', 'classical'])
                 
+                    is_long_request = limit >= 600 # 10dk+ maçlar
+                
+                    # MANTIK: Uzun maç slotu doluysa veya süre güvenli değilse reddet
+                    if not is_time_safe:
+                        client.challenges.decline(challenge_id, reason='later')
+                    elif is_long_request and long_game_count >= 1:
+                        client.challenges.decline(challenge_id, reason='later')
+                        print(f"⚠️ Klasik/Rapid slotu dolu, reddedildi: {challenge_id}")
+                    elif len(active_games) < 2:
+                        client.challenges.accept(challenge_id)
+                        print(f"✅ Maç kabul edildi: {challenge_id}")
+                    else:
+                        client.challenges.decline(challenge_id, reason='later')
+
+                # 2. MAÇ BAŞLAMA KONTROLÜ (Game Start)
                 elif event['type'] == 'gameStart':
                     game_id = event['game']['id']
                     if game_id not in active_games:
                         active_games.add(game_id)
-                        # Her oyun için wrapper üzerinden thread başlatıyoruz
-                        # Bu sayede oyun bitince slot otomatik boşalır
+                        # Yeni maç için thread başlat
                         threading.Thread(
                             target=handle_game_wrapper, 
-                            args=(client, game_id, bot, my_id, active_games)
+                            args=(client, game_id, bot, my_id, active_games),
+                            daemon=True
                         ).start()
                 
-                # Kritik sürede döngüden çık
+                # Zaman kontrolü (İç döngüden çıkış)
                 if current_elapsed > 21300:
                     break
 
         except Exception as e:
-            # Bağlantı koparsa veya Lichess timeout verirse bekle ve devam et
+            # Bağlantı koparsa veya Lichess timeout verirse 5 saniye bekle ve devam et
+            print(f"⚠️ Ana döngüde hata oluştu, yeniden bağlanılıyor: {e}")
             time.sleep(5)
 
 def handle_game_wrapper(client, game_id, bot, my_id, active_games):

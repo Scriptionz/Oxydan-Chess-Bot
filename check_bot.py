@@ -51,6 +51,7 @@ def run_diagnostic():
                 try:
                     engine = bot.engine_pool.get_nowait()
                     engine.quit()
+                    print("✅ Bir motor başarıyla kapatıldı.")
                 except:
                     pass
             

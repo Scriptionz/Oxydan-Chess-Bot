@@ -118,30 +118,51 @@ class Matchmaker:
             print("[Matchmaker] Devre dışı.")
             return
 
+        # Botun başlangıç zamanını kaydet (5. saat kontrolü için)
+        start_time = time.time()
+
         while True:
             try:
-                # 1. DEĞİŞİKLİK: Yerel slot kontrolü (API'yi yormaz)
-                # Eğer 3 maç da doluysa yeni maç arama, bekle.
+                # 1. Slot Kontrolü (2 motor/slot sınırı)
                 if len(self.active_games) >= self.max_parallel_games:
-                    time.sleep(45) 
+                    time.sleep(30) 
                     continue
 
-                # 2. Hedef bul
+                # 2. Çalışma Süresi Kontrolü
+                elapsed = time.time() - start_time
+                
+                # 3. Hedef rakip bul
                 target = self._get_valid_target()
                 if not target:
                     print("[Matchmaker] Uygun rakip bulunamadı, bekleniyor...")
-                    time.sleep(120)
+                    time.sleep(60)
                     continue
 
-                # 3. Zaman kontrolü
-                tcs = self.config.get("time_controls", ["3+0", "3+2", "5+0"])
-                tc = random.choice(tcs)
+                # --- DICE (ZAR) MANTIĞI İLE ZAMAN KONTROLÜ SEÇİMİ ---
+                # Klasik < Rapid < Blitz/Bullet hiyerarşisi
+                dice = random.random()
+                
+                # 5. saatten (18000 sn) sonra sadece Bullet/Blitz seç
+                if elapsed > 18000:
+                    tc = random.choice(["1+0", "2+1", "3+0", "3+2", "5+0"])
+                    if dice < 0.10: # %10 şansla log yazdır
+                        print("[Matchmaker] 5. saat doldu, sadece hızlı maçlar aranıyor.")
+                else:
+                    # Normal olasılık dağılımı
+                    if dice < 0.05:    # %5 şans: Klasik
+                        tc = "30+0"
+                    elif dice < 0.20:  # %15 şans: Rapid
+                        tc = random.choice(["10+0", "10+2"])
+                    else:              # %80 şans: Bullet/Blitz
+                        tc = random.choice(["1+0", "2+1", "3+0", "3+2", "5+0", "5+2"])
+
+                # 4. Seçilen TC'yi ayrıştır
                 t_limit, t_inc = map(int, tc.split('+'))
 
-                # 4. Meydan oku
+                # 5. Meydan oku
                 try:
-                    # Spam engeli için hemen listeye al
-                    self.blacklist[target] = datetime.now() + timedelta(minutes=120)
+                    # Rakibi geçici olarak engelle ki sürekli aynı bota sarmasın
+                    self.blacklist[target] = datetime.now() + timedelta(minutes=60)
                     
                     self.client.challenges.create(
                         username=target,
@@ -149,19 +170,17 @@ class Matchmaker:
                         clock_limit=t_limit * 60,
                         clock_increment=t_inc
                     )
-                    print(f"[Matchmaker] -> {target} ({tc}) Meydan okuma gönderildi.")
+                    print(f"[Matchmaker] -> {target} ({tc}) Meydan okuma gönderildi. [Zar: {dice:.2f}]")
                     
-                    # 3. DEĞİŞİKLİK: Maç arama aralığını kısalttık
-                    # Artık 3 slotumuz olduğu için bir maç gönderdikten sonra 
-                    # diğer slotları doldurmak için çok uzun beklemeye gerek yok.
-                    time.sleep(random.randint(20, 45))
+                    # Slotları doldurmak için bekleme süresi
+                    time.sleep(random.randint(25, 50))
 
                 except Exception as e:
                     if "429" in str(e): 
                         self._handle_rate_limit(e)
                     else:
-                        print(f"[Matchmaker] Meydan okuma hatası: {target}")
-                        self.blacklist[target] = datetime.now() + timedelta(hours=6)
+                        print(f"[Matchmaker] Meydan okuma reddedildi/hata: {target}")
+                        self.blacklist[target] = datetime.now() + timedelta(hours=3)
                         time.sleep(10)
 
             except Exception as e:

@@ -164,17 +164,30 @@ class Matchmaker:
                     # --- ANTI-ABORT BEKÇİSİ (v7 GÜNCELLEMESİ) ---
                     # Meydan okumadan sonra 60 saniye boyunca oyunun başlayıp başlamadığını izle
                     watch_start = time.time()
-                    while time.time() - watch_start < 60:
-                        if len(self.active_games) > 0:
-                            print(f"[Matchmaker] ✅ Oyun başladı. Bekçi moduna giriliyor...")
-                            # OYUN DEVAM ETTİĞİ SÜRECE BURADA KAL (Yeni challenge atma)
-                            while len(self.active_games) > 0:
-                                time.sleep(15) # 15 saniyede bir oyunun bitip bitmediğini kontrol et
-                            print(f"[Matchmaker] 🏁 Oyun bitti. Bekçi modu kapandı.")
-                            break
-                        time.sleep(5) # Oyunun başlamasını 5 saniyede bir kontrol et
+                game_started = False
+                
+                while time.time() - watch_start < 45: # 60 çok uzun, 45sn ideal
+                    if len(self.active_games) >= self.max_parallel_games:
+                        # SLOTLAR TAMAMEN DOLU (2/2)
+                        print(f"[Matchmaker] ✅ Tüm slotlar dolu ({len(self.active_games)}/2). Bekçi moduna giriliyor...")
+                        while len(self.active_games) >= self.max_parallel_games:
+                            time.sleep(15) 
+                        print(f"[Matchmaker] 🏁 Bir slot boşaldı. Tekrar aranıyor.")
+                        game_started = True
+                        break 
                     
-                    # Challenge sonrası zorunlu dinlenme (Lichess API sağlığı için)
+                    # Eğer en az bir maç başladıysa ama hala boş slot varsa
+                    # Beklemeyi bırak ki döngü başına dönüp 2. slotu arasın
+                    elif len(self.active_games) > 0 and len(self.active_games) < self.max_parallel_games:
+                        print(f"[Matchmaker] ✅ İlk maç başladı. 2. slot aranıyor...")
+                        game_started = True
+                        break
+                        
+                    time.sleep(5)
+                
+                # Eğer challenge gönderdik ama 45sn içinde hiç maç başlamadıysa
+                # Lichess API'yi yormamak için kısa bir dinlenme verip devam et
+                if not game_started:
                     time.sleep(20)
 
                 except Exception as e:

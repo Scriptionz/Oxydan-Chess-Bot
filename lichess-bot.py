@@ -123,57 +123,56 @@ class OxydanAegisV4:
                 
 def handle_game(client, game_id, bot, my_id):
     try:
-        # Hızlı etkileşim: Lichess'e botun aktif olduğunu bildirmek için hemen mesaj atıyoruz
-        client.bots.post_message(game_id, "Oxydan v4 is ready. Good luck!")
+        # Hızlı etkileşim
+        client.bots.post_message(game_id, "Oxydan v7 (Aegis) Active. Stabilizing connection...")
         stream = client.bots.stream_game_state(game_id)
         my_color = None
         board = chess.Board()
 
         for state in stream:
-            # Lichess hata dönerse (429 gibi) akışı durdur
             if 'error' in state:
-                print(f"[{game_id}] Akış hatası: {state['error']}")
+                print(f"[{game_id}] API Hatası: {state['error']}")
                 break
 
             if state['type'] == 'gameFull':
                 my_color = chess.WHITE if state['white'].get('id') == my_id else chess.BLACK
                 curr_state = state['state']
-                moves = curr_state.get('moves', "").split()
-                board = chess.Board()
-                for m in moves: board.push_uci(m)
-                
             elif state['type'] == 'gameState':
                 curr_state = state
-                moves_list = curr_state.get('moves', "").split()
-                if moves_list:
-                    last_move = moves_list[-1]
-                    if not board.move_stack or board.peek().uci() != last_move:
-                        board.push_uci(last_move)
-            else: 
+            else:
                 continue
 
-            # Oyun bittiyse veya iptal edildiyse döngüden çık
-            if curr_state.get('status') in ['mate', 'resign', 'draw', 'outoftime', 'aborted']:
-                print(f"[{game_id}] Oyun bitti/iptal edildi. Durum: {curr_state.get('status')}")
+            # Hamleleri güncelle
+            moves = curr_state.get('moves', "").split()
+            board = chess.Board()
+            for m in moves: board.push_uci(m)
+
+            # --- OYUN SONU KONTROLÜ (Geliştirilmiş) ---
+            if curr_state.get('status') in ['mate', 'resign', 'draw', 'outoftime', 'aborted', 'stalemate']:
+                print(f"[{game_id}] Terminal Durum: {curr_state.get('status')}")
                 break
 
             if board.turn == my_color and not board.is_game_over():
-                wtime = curr_state.get('wtime')
-                btime = curr_state.get('btime')
-                winc = curr_state.get('winc')
-                binc = curr_state.get('binc')
+                wtime, btime = curr_state.get('wtime'), curr_state.get('btime')
+                winc, binc = curr_state.get('winc'), curr_state.get('binc')
 
                 move = bot.get_best_move(board, wtime, btime, winc, binc)
                 
                 if move:
-                    # Hamle yaparken hata alınırsa (network/limit) 5 kez deniyoruz
-                    for attempt in range(5):
+                    # Hamle yaparken 429 veya network hatasına karşı direnç
+                    success = False
+                    for attempt in range(3):
                         try:
                             client.bots.make_move(game_id, move.uci())
+                            success = True
                             break 
                         except Exception as e:
-                            print(f"[{game_id}] Hamle deneme {attempt+1} hatası: {e}")
-                            time.sleep(1) # Hata anında API'yi dinlendir
+                            wait = (attempt + 1) * 2
+                            print(f"[{game_id}] Hamle iletilemedi, {wait}sn sonra tekrar denenecek...")
+                            time.sleep(wait)
+                    if not success:
+                        print(f"[{game_id}] KRİTİK: Hamle iletilemedi, akış kesiliyor.")
+                        break
 
     except Exception as e:
         print(f"Oyun Hatası ({game_id}): {e}", flush=True)
@@ -212,7 +211,7 @@ def main():
         try:
             elapsed = time.time() - start_time
             
-            # 5 saat 55 dakika dolduysa tamamen kapat (Güvenli çıkış)
+            # 5 saat 55 dakika dolduysa tamamen kapat
             if elapsed > 21300:
                 print("🛑 KRİTİK ZAMAN: 6 saat sınırına ulaşıldı. Kapatılıyor.", flush=True)
                 sys.exit(0)
@@ -222,10 +221,10 @@ def main():
                 current_elapsed = time.time() - start_time
                 
                 # --- 1. GÜVENLİK DUVARI: SERT SLOT KONTROLÜ ---
-                # Eğer 2 maç zaten varsa, yeni gelen her şeyi anında reddet (Sistem taşmasın)
                 if len(active_games) >= 2:
                     if event['type'] == 'challenge':
-                        client.challenges.decline(event['challenge']['id'], reason='later')
+                        try: client.challenges.decline(event['challenge']['id'], reason='later')
+                        except: pass
                     continue
 
                 # 1. MEYDAN OKUMA KONTROLÜ (Challenge)
@@ -235,10 +234,8 @@ def main():
                     
                     tc = challenge.get('timeControl', {})
                     limit = tc.get('limit', 0)
+                    is_long_request = limit >= 600
                     
-                    is_long_request = limit >= 600  # 10 dk ve üzeri (Rapid/Klasik)
-                    
-                    # MEVCUT KURALLARIN KORUNMASI:
                     # 1. KURAL: 5. saatten sonra asla uzun maç kabul etme
                     if is_long_request and current_elapsed > 18000:
                         client.challenges.decline(challenge_id, reason='later')
@@ -251,34 +248,37 @@ def main():
                         continue
 
                     # 3. KURAL: Uzun maç slot kontrolü (Max 1 adet)
-                    ongoing_games = client.games.get_ongoing()
-                    long_game_count = sum(1 for g in ongoing_games if g['speed'] in ['rapid', 'classical'])
+                    try:
+                        ongoing_games = client.games.get_ongoing()
+                        long_game_count = sum(1 for g in ongoing_games if g['speed'] in ['rapid', 'classical'])
+                    except:
+                        long_game_count = 0 # API hatası durumunda risk alma
 
                     if is_long_request and long_game_count >= 1:
                         client.challenges.decline(challenge_id, reason='later')
                     elif len(active_games) < 2:
                         client.challenges.accept(challenge_id)
+                        print(f"✅ Meydan okuma kabul edildi: {challenge_id}")
                     else:
                         client.challenges.decline(challenge_id, reason='later')
 
                 # 2. MAÇ BAŞLAMA KONTROLÜ (Game Start)
                 elif event['type'] == 'gameStart':
                     game_id = event['game']['id']
-                    # Sadece boş slotumuz varsa thread başlat
                     if game_id not in active_games and len(active_games) < 2:
                         active_games.add(game_id)
+                        # Matchmaker'ın bu logu görmesi lazım:
+                        print(f"🎮 Maç Başladı: {game_id} | Mevcut Slot: {len(active_games)}/2", flush=True)
                         threading.Thread(
                             target=handle_game_wrapper, 
                             args=(client, game_id, bot, my_id, active_games),
                             daemon=True
                         ).start()
                 
-                # Zaman kontrolü (İç döngüden çıkış)
                 if current_elapsed > 21300:
                     break
 
         except Exception as e:
-            # 429 (API Limiti) hatası alınırsa botu 2 dakika tamamen sustur
             if "429" in str(e):
                 print("🚨 API LİMİTİ AŞILDI! 2 Dakika zorunlu uyku modu...", flush=True)
                 time.sleep(120)

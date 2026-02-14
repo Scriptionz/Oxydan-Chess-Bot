@@ -21,27 +21,32 @@ class OxydanAegisV4:
         self.exe_path = exe_path
         self.book_path = "./M11.2.bin"
         self.engine_pool = queue.Queue()
-        
-        # Oyun verilerini takip etmek için (Resign/Draw/Time için)
         self.game_histories = {} 
 
         try:
-            # İşlemci çekirdek sayısına göre Threads ayarla
             cores = os.cpu_count() or 2
             for i in range(2):
                 eng = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=30)
-                # UCI Optimizasyonu: Hash ve Threads kritiktir
-                eng.configure({
+                
+                # --- GÜNCELLEME: GÜVENLİ YAPILANDIRMA ---
+                base_configs = {
                     "Hash": 256, 
-                    "Threads": max(1, cores // 2),
-                    "Ponder": "false"
-                })
+                    "Threads": max(1, cores // 2)
+                }
+                
+                for opt, val in base_configs.items():
+                    try: eng.configure({opt: val})
+                    except: pass
+
                 if uci_options:
                     for opt, val in uci_options.items():
+                        # Ponder hatasını engellemek için filtre
+                        if opt.lower() == "ponder": continue
                         try: eng.configure({opt: val})
                         except: pass
+                
                 self.engine_pool.put(eng)
-            print(f"🚀 Oxydan v4: Motorlar optimize edildi. Çekirdek kullanımı: {cores//2}x2", flush=True)
+            print(f"🚀 Oxydan v7: Motorlar başarıyla hazırlandı.", flush=True)
         except Exception as e:
             print(f"KRİTİK HATA: Motorlar başlatılamadı: {e}", flush=True)
             sys.exit(1)
@@ -230,65 +235,63 @@ def main():
     bot = OxydanAegisV4(EXE_PATH, uci_options=config.get('engine', {}).get('uci_options', {}))
     active_games = set() 
     
-    # Matchmaker'ı mm değişkenine ata ki sonra durdurabilelim
     mm = None
     if config.get("matchmaking"):
         mm = Matchmaker(client, config, active_games) 
         threading.Thread(target=mm.start, daemon=True).start()
     
-    print("🚀 Oxydan v7 Sistemi Aktif. Durdurmak için klasöre 'STOP' dosyası ekleyin.")
+    print("🚀 Oxydan v7 Sistemi Aktif. Durdurmak için 'STOP' dosyası oluşturun.")
+
+    # Event stream'i bir değişken olarak dışarı alıyoruz
+    events = client.bots.stream_incoming_events()
 
     while True:
         try:
-            # --- GÜVENLİ DURDURMA KONTROLÜ ---
-            if os.path.exists("STOP"):
-                if mm: mm.enabled = False # Yeni meydan okuma göndermeyi kes
-                
+            # 1. KRİTİK KONTROL: Kapatma sinyali var mı?
+            curr_elapsed = time.time() - start_time
+            is_shutting_down = os.path.exists("STOP") or curr_elapsed > 20700
+            
+            if is_shutting_down:
+                if mm: mm.enabled = False # Yeni meydan okuma atmayı kes
                 if len(active_games) == 0:
-                    print("✅ [STOP] Aktif maç kalmadı. Sistem güvenli şekilde kapatıldı.")
-                    os.remove("STOP") # Temizlik
-                    os._exit(0) # Tüm threadlerle birlikte tamamen çık
+                    print("✅ [GÜVENLİ ÇIKIŞ] Aktif maç kalmadı. Sistem kapatılıyor.")
+                    if os.path.exists("STOP"): os.remove("STOP")
+                    os._exit(0)
+
+            # 2. EVENT KONTROLÜ (Bloklamayı kırmak için next() kullanımı)
+            try:
+                # stream'den bir sonraki olayı al, 1 saniye bekle (bloklamayı azaltır)
+                event = next(events)
+            except (StopIteration, Exception):
+                # Eğer yeni event yoksa döngü başına dön ve STOP dosyasını tekrar kontrol et
+                time.sleep(1)
+                continue
+
+            # 3. GELEN EVENTLERİ İŞLE
+            if event['type'] == 'challenge':
+                ch_id = event['challenge']['id']
+                if len(active_games) >= 2 or is_shutting_down:
+                    client.challenges.decline(ch_id, reason='later')
                 else:
-                    # Logu sadece bir kez basması için veya seyrek basması için kontrol eklenebilir
-                    pass 
+                    time.sleep(3)
+                    client.challenges.accept(ch_id)
 
-            elapsed = time.time() - start_time
-            if elapsed > 21300: os._exit(0)
+            elif event['type'] == 'gameStart':
+                g_id = event['game']['id']
+                if g_id not in active_games and not is_shutting_down:
+                    if len(active_games) < 2:
+                        active_games.add(g_id)
+                        threading.Thread(target=handle_game_wrapper, 
+                                         args=(client, g_id, bot, my_id, active_games), 
+                                         daemon=True).start()
 
-            # Lichess'ten gelen eventleri dinle
-            for event in client.bots.stream_incoming_events():
-                curr_elapsed = time.time() - start_time
-                
-                # STOP dosyası varsa veya süre dolduysa tüm yeni teklifleri reddet
-                is_shutting_down = os.path.exists("STOP") or curr_elapsed > 20700
-
-                if event['type'] == 'challenge':
-                    ch_id = event['challenge']['id']
-                    
-                    if len(active_games) >= 2 or is_shutting_down:
-                        client.challenges.decline(ch_id, reason='later')
-                    else:
-                        time.sleep(3) # Motor hazırlığı için nefes payı
-                        client.challenges.accept(ch_id)
-
-                elif event['type'] == 'gameStart':
-                    g_id = event['game']['id']
-                    if g_id not in active_games and not is_shutting_down:
-                        if len(active_games) < 2:
-                            active_games.add(g_id)
-                            threading.Thread(target=handle_game_wrapper, 
-                                             args=(client, g_id, bot, my_id, active_games), 
-                                             daemon=True).start()
-                        else:
-                            # Nadir bir durum: Aynı anda iki kabul gelirse son güvenlik
-                            pass
-                
-                # Döngü içi erken çıkış kontrolü
-                if is_shutting_down and len(active_games) == 0:
-                    break
-                    
         except Exception as e:
-            time.sleep(10)
+            # Bağlantı kopması durumunda stream'i tazelemek gerekebilir
+            print(f"⚠️ Bağlantı hatası veya Stream kesildi: {e}")
+            time.sleep(5)
+            # Stream'i yeniden başlatmayı dene
+            try: events = client.bots.stream_incoming_events()
+            except: pass
 
 if __name__ == "__main__":
     main()

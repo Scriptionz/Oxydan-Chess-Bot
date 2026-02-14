@@ -37,19 +37,16 @@ class Matchmaker:
     def _refresh_bot_pool(self):
         """Lichess'ten online bot listesini çeker."""
         now = time.time()
-        # Liste boşsa veya süre dolduysa güncelle
         if not self.bot_pool or (now - self.last_pool_update > self.pool_timeout):
             try:
                 print("[Matchmaker] Bot listesi güncelleniyor...", flush=True)
-                # get_online_bots() generator döndürür, islice ile sınırlıyoruz
                 stream = self.client.bots.get_online_bots()
                 online_bots = list(itertools.islice(stream, 100))
                 
-                # Kendimizi ve pasifleri ayıklayarak listeyi oluştur
                 self.bot_pool = [b.get('id') for b in online_bots if b.get('id') and b.get('id').lower() != self.my_id.lower()]
                 random.shuffle(self.bot_pool)
                 self.last_pool_update = now
-                self.consecutive_429s = 0 # Başarılı istekte hata sayacını sıfırla
+                self.consecutive_429s = 0 
             except Exception as e:
                 print(f"[Matchmaker] Liste çekilemedi: {e}")
                 self._handle_rate_limit(e)
@@ -58,7 +55,7 @@ class Matchmaker:
         """429 Too Many Requests hatasını yönetir."""
         if "429" in str(error):
             self.consecutive_429s += 1
-            wait_time = 600 * self.consecutive_429s # 10, 20, 30... dakika bekle
+            wait_time = 600 * self.consecutive_429s 
             print(f"!!! [API LIMIT] {wait_time//60} dakika zorunlu uyku modu...")
             time.sleep(wait_time)
         else:
@@ -72,7 +69,6 @@ class Matchmaker:
                 return False, 0
                 
             perfs = user_data.get('perfs', {})
-            # Sadece aktif olduğu kategorilere bak (oyun sayısı > 10 olanlar)
             ratings = []
             for cat in ['blitz', 'bullet', 'rapid']:
                 perf = perfs.get(cat, {})
@@ -91,10 +87,8 @@ class Matchmaker:
         self._refresh_bot_pool()
         now = datetime.now()
         
-        # Süresi dolan yasakları temizle
         self.blacklist = {k: v for k, v in self.blacklist.items() if v > now}
         
-        # API'yi yormamak için her döngüde en fazla 5 profili sorgula
         tried_this_cycle = 0
         for target in self.bot_pool:
             if tried_this_cycle >= 5: break
@@ -108,7 +102,6 @@ class Matchmaker:
             if is_suitable:
                 return target
             else:
-                # Kriter dışı botu 24 saat boyunca bir daha sorma
                 self.blacklist[target] = now + timedelta(hours=24)
         
         return None
@@ -122,29 +115,23 @@ class Matchmaker:
 
         while True:
             try:
-                # 1. SERT SLOT KONTROLÜ (Daha disiplinli)
-                # Aktif oyun sayısı sınırı aşmışsa veya sınıra çok yakınsa bekle
                 if len(self.active_games) >= self.max_parallel_games:
-                    # Slot dolu, agresifliği sıfıra indir
                     time.sleep(30) 
                     continue
 
-                # 2. Çalışma Süresi Kontrolü (6 saat sınırına yaklaştıysan dur)
                 elapsed = time.time() - start_time
-                if elapsed > 20700: # 5 saat 45 dakika
+                if elapsed > 20700: 
                     print("[Matchmaker] Kapanış saati yaklaştı, yeni maç aranmıyor.")
                     time.sleep(600)
                     continue
 
-                # 3. Hedef rakip bul
                 target = self._get_valid_target()
                 if not target:
                     time.sleep(60)
                     continue
 
-                # --- ZAMAN KONTROLÜ SEÇİMİ (Mevcut mantık korundu) ---
                 dice = random.random()
-                if elapsed > 18000: # 5. saatten sonra sadece hızlı
+                if elapsed > 18000: 
                     tc_list = ["1+0", "2+1", "3+0"]
                 else:
                     if dice < 0.05: tc_list = ["30+0"]
@@ -154,14 +141,11 @@ class Matchmaker:
                 tc = random.choice(tc_list)
                 t_limit, t_inc = map(int, tc.split('+'))
 
-                # 4. MEYDAN OKUMA ÖNCESİ SON KONTROL
-                # Tam bu satırda 2. maç başlamış olabilir, tekrar kontrol et
                 if len(self.active_games) >= self.max_parallel_games:
                     continue
 
                 # 5. Meydan oku
                 try:
-                    # Rakibi 1 saatliğine kara listeye al (spam yapmamak için)
                     self.blacklist[target] = datetime.now() + timedelta(minutes=60)
                     
                     self.client.challenges.create(
@@ -172,10 +156,21 @@ class Matchmaker:
                     )
                     print(f"[Matchmaker] -> {target} ({tc}) Gönderildi. Slot: {len(self.active_games)}/2")
                     
-                    # --- KRİTİK DEĞİŞİKLİK: CHALLENGE SONRASI UYKU ---
-                    # Meydan okuma gönderdikten sonra Lichess'in ve rakibin nefes almasına izin ver.
-                    # Eğer hemen döngüye girerse 2. ve 3. meydan okumayı gönderir ve abort riski doğar.
-                    time.sleep(60) # Karşı tarafın kabul etmesi için 1 dakika bekleme alanı
+                    # --- ANTI-ABORT BEKÇİSİ (v7 GÜNCELLEMESİ) ---
+                    # Meydan okumadan sonra 60 saniye boyunca oyunun başlayıp başlamadığını izle
+                    watch_start = time.time()
+                    while time.time() - watch_start < 60:
+                        if len(self.active_games) > 0:
+                            print(f"[Matchmaker] ✅ Oyun başladı. Bekçi moduna giriliyor...")
+                            # OYUN DEVAM ETTİĞİ SÜRECE BURADA KAL (Yeni challenge atma)
+                            while len(self.active_games) > 0:
+                                time.sleep(15) # 15 saniyede bir oyunun bitip bitmediğini kontrol et
+                            print(f"[Matchmaker] 🏁 Oyun bitti. Bekçi modu kapandı.")
+                            break
+                        time.sleep(5) # Oyunun başlamasını 5 saniyede bir kontrol et
+                    
+                    # Challenge sonrası zorunlu dinlenme (Lichess API sağlığı için)
+                    time.sleep(20)
 
                 except Exception as e:
                     if "429" in str(e): 

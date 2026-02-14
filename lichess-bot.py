@@ -230,32 +230,63 @@ def main():
     bot = OxydanAegisV4(EXE_PATH, uci_options=config.get('engine', {}).get('uci_options', {}))
     active_games = set() 
     
+    # Matchmaker'ı mm değişkenine ata ki sonra durdurabilelim
+    mm = None
     if config.get("matchmaking"):
         mm = Matchmaker(client, config, active_games) 
         threading.Thread(target=mm.start, daemon=True).start()
     
+    print("🚀 Oxydan v7 Sistemi Aktif. Durdurmak için klasöre 'STOP' dosyası ekleyin.")
+
     while True:
         try:
-            elapsed = time.time() - start_time
-            if elapsed > 21300: sys.exit(0)
+            # --- GÜVENLİ DURDURMA KONTROLÜ ---
+            if os.path.exists("STOP"):
+                if mm: mm.enabled = False # Yeni meydan okuma göndermeyi kes
+                
+                if len(active_games) == 0:
+                    print("✅ [STOP] Aktif maç kalmadı. Sistem güvenli şekilde kapatıldı.")
+                    os.remove("STOP") # Temizlik
+                    os._exit(0) # Tüm threadlerle birlikte tamamen çık
+                else:
+                    # Logu sadece bir kez basması için veya seyrek basması için kontrol eklenebilir
+                    pass 
 
+            elapsed = time.time() - start_time
+            if elapsed > 21300: os._exit(0)
+
+            # Lichess'ten gelen eventleri dinle
             for event in client.bots.stream_incoming_events():
                 curr_elapsed = time.time() - start_time
+                
+                # STOP dosyası varsa veya süre dolduysa tüm yeni teklifleri reddet
+                is_shutting_down = os.path.exists("STOP") or curr_elapsed > 20700
+
                 if event['type'] == 'challenge':
                     ch_id = event['challenge']['id']
-                    if len(active_games) >= 2 or curr_elapsed > 20700:
+                    
+                    if len(active_games) >= 2 or is_shutting_down:
                         client.challenges.decline(ch_id, reason='later')
                     else:
-                        time.sleep(3)
+                        time.sleep(3) # Motor hazırlığı için nefes payı
                         client.challenges.accept(ch_id)
 
                 elif event['type'] == 'gameStart':
                     g_id = event['game']['id']
-                    if g_id not in active_games and len(active_games) < 2:
-                        active_games.add(g_id)
-                        threading.Thread(target=handle_game_wrapper, args=(client, g_id, bot, my_id, active_games), daemon=True).start()
+                    if g_id not in active_games and not is_shutting_down:
+                        if len(active_games) < 2:
+                            active_games.add(g_id)
+                            threading.Thread(target=handle_game_wrapper, 
+                                             args=(client, g_id, bot, my_id, active_games), 
+                                             daemon=True).start()
+                        else:
+                            # Nadir bir durum: Aynı anda iki kabul gelirse son güvenlik
+                            pass
                 
-                if curr_elapsed > 21300: break
+                # Döngü içi erken çıkış kontrolü
+                if is_shutting_down and len(active_games) == 0:
+                    break
+                    
         except Exception as e:
             time.sleep(10)
 

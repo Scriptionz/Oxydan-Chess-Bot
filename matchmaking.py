@@ -13,6 +13,7 @@ SETTINGS = {
     "MIN_RATING": 1500,          # Rakip minimum kaç elo olsun?
     "MAX_RATING": 4000,          # Rakip maksimum kaç elo olsun?
     "SAFETY_LOCK_TIME": 45,      # Davet attıktan sonra kaç saniye dondurulsun? (Beton Fren)
+    "LOW_ELO_THRESHOLD": 2000,
     "STOP_FILE": "STOP.txt",     # Durdurma dosyası adı
     "TIME_CONTROLS": ["1+0", "1+1", "2+1",                  # Bullet
         "3+0", "3+2", "5+0", "5+3",            # Blitz

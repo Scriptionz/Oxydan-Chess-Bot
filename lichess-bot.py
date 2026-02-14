@@ -209,6 +209,13 @@ def main():
     # --- ANA DÖNGÜ ---
     while True:
         try:
+            # --- STOP.txt KONTROLÜ (Döngü Başında) ---
+            stop_signal = os.path.exists("STOP.txt")
+            if stop_signal:
+                # Sadece log kirliliği olmasın diye 60 saniyede bir yazdırır
+                if int(time.time()) % 60 == 0:
+                    print("🛑 STOP.txt tespit edildi. Mevcut maçlar bitince bot duracak.", flush=True)
+
             elapsed = time.time() - start_time
             
             # 5 saat 55 dakika dolduysa tamamen kapat
@@ -220,15 +227,18 @@ def main():
             for event in client.bots.stream_incoming_events():
                 current_elapsed = time.time() - start_time
                 
-                # --- 1. GÜVENLİK DUVARI: SERT SLOT KONTROLÜ ---
-                if len(active_games) >= 2:
+                # --- 1. GÜVENLİK DUVARI: SERT SLOT KONTROLÜ VEYA STOP SİNYALİ ---
+                if len(active_games) >= 2 or stop_signal:
                     if event['type'] == 'challenge':
-                        try: client.challenges.decline(event['challenge']['id'], reason='later')
+                        try: 
+                            client.challenges.decline(event['challenge']['id'], reason='later')
+                            if stop_signal: print(f"🛑 STOP aktif: {event['challenge']['id']} reddedildi.")
                         except: pass
                     continue
 
                 # 1. MEYDAN OKUMA KONTROLÜ (Challenge)
                 if event['type'] == 'challenge':
+                    # Buraya gelindiğinde stop_signal zaten false'dur (Yukarıdaki IF sayesinde)
                     challenge = event['challenge']
                     challenge_id = challenge['id']
                     
@@ -252,7 +262,7 @@ def main():
                         ongoing_games = client.games.get_ongoing()
                         long_game_count = sum(1 for g in ongoing_games if g['speed'] in ['rapid', 'classical'])
                     except:
-                        long_game_count = 0 # API hatası durumunda risk alma
+                        long_game_count = 0 
 
                     if is_long_request and long_game_count >= 1:
                         client.challenges.decline(challenge_id, reason='later')
@@ -267,7 +277,6 @@ def main():
                     game_id = event['game']['id']
                     if game_id not in active_games and len(active_games) < 2:
                         active_games.add(game_id)
-                        # Matchmaker'ın bu logu görmesi lazım:
                         print(f"🎮 Maç Başladı: {game_id} | Mevcut Slot: {len(active_games)}/2", flush=True)
                         threading.Thread(
                             target=handle_game_wrapper, 
@@ -275,7 +284,8 @@ def main():
                             daemon=True
                         ).start()
                 
-                if current_elapsed > 21300:
+                # İç döngüden çıkış ve STOP.txt kontrolü için yeniden başlatma
+                if current_elapsed > 21300 or os.path.exists("STOP.txt"):
                     break
 
         except Exception as e:

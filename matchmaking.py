@@ -149,5 +149,9 @@ class Matchmaker:
                 time.sleep(SETTINGS["SAFETY_LOCK_TIME"]) 
 
             except Exception as e:
-                print(f"[Matchmaker] Hata: {e}")
-                time.sleep(30)
+                if "429" in str(e):
+                    print("⚠️ [Matchmaker] Lichess Rate Limit uyarısı! 2 dakika boyunca tüm istekler durduruluyor...")
+                    time.sleep(120)  # 429 hatası alınca 2 dakika hiçbir şey yapma
+                else:
+                    print(f"[Matchmaker] Hata: {e}")
+                    time.sleep(30)

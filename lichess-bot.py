@@ -246,6 +246,7 @@ def main():
                     if len(active_games) >= 2 or curr_elapsed > 20700:
                         client.challenges.decline(ch_id, reason='later')
                     else:
+                        time.sleep(3)
                         client.challenges.accept(ch_id)
 
                 elif event['type'] == 'gameStart':

@@ -109,7 +109,7 @@ def _get_valid_target(self):
         
         return None
 
-    def start(self):
+def start(self):
         if not self.enabled: 
             print("[Matchmaker] Devre dışı.")
             return

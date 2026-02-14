@@ -1,2 +1,0 @@
-*.h linguist-language=C
-*.bin filter=lfs diff=lfs merge=lfs -text

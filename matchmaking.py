@@ -150,8 +150,16 @@ class Matchmaker:
 
             except Exception as e:
                 if "429" in str(e):
-                    print("⚠️ [Matchmaker] Lichess Rate Limit uyarısı! 2 dakika boyunca tüm istekler durduruluyor...")
-                    time.sleep(120)  # 429 hatası alınca 2 dakika hiçbir şey yapma
+                    print(f"⚠️ [Matchmaker] Lichess Rate Limit uyarısı! {self.wait_timeout} saniye boyunca tüm istekler durduruluyor...")
+                    time.sleep(self.wait_timeout)
+                    
+                    # Hata devam ederse bir sonraki bekleme süresini iki katına çıkar (Maksimum 1 saat olsun)
+                    self.wait_timeout = min(self.wait_timeout * 2, 3600) 
                 else:
                     print(f"[Matchmaker] Hata: {e}")
+                    # Normal hatalarda bekleme süresini sıfırlama, ama 30 saniye bekle
                     time.sleep(30)
+                    
+                continue
+            self.wait_timeout = 120
+

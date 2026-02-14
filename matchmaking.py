@@ -83,7 +83,7 @@ class Matchmaker:
         except Exception:
             return False, 0
 
-def _get_valid_target(self):
+    def _get_valid_target(self):
         """Hem Elo hem de kara liste kontrolü yaparak rakip seçer."""
         self._refresh_bot_pool()
         now = datetime.now()
@@ -109,7 +109,7 @@ def _get_valid_target(self):
         
         return None
 
-def start(self):
+    def start(self):
         if not self.enabled: 
             print("[Matchmaker] Devre dışı.")
             return

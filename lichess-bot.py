@@ -8,6 +8,7 @@ import chess.polyglot
 import threading
 import yaml
 import requests
+import queue
 from datetime import timedelta
 from matchmaking import Matchmaker
 
@@ -15,25 +16,32 @@ from matchmaking import Matchmaker
 TOKEN = os.environ.get('LICHESS_TOKEN')
 EXE_PATH = "./src/Ethereal"
 
-import queue
-
 class OxydanAegisV4:
     def __init__(self, exe_path, uci_options=None):
         self.exe_path = exe_path
         self.book_path = "./M11.2.bin"
-        self.uci_options = uci_options
-        # Motor Havuzu: Aynı anda 3 maçı yönetecek 3 ayrı motor örneği
         self.engine_pool = queue.Queue()
         
+        # Oyun verilerini takip etmek için (Resign/Draw/Time için)
+        self.game_histories = {} 
+
         try:
+            # İşlemci çekirdek sayısına göre Threads ayarla
+            cores = os.cpu_count() or 2
             for i in range(2):
                 eng = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=30)
+                # UCI Optimizasyonu: Hash ve Threads kritiktir
+                eng.configure({
+                    "Hash": 256, 
+                    "Threads": max(1, cores // 2),
+                    "Ponder": "false"
+                })
                 if uci_options:
                     for opt, val in uci_options.items():
                         try: eng.configure({opt: val})
                         except: pass
                 self.engine_pool.put(eng)
-            print(f"🚀 Oxydan v4 Aktif: 2 Bağımsız Motor Ünitesi Hazır.", flush=True)
+            print(f"🚀 Oxydan v4: Motorlar optimize edildi. Çekirdek kullanımı: {cores//2}x2", flush=True)
         except Exception as e:
             print(f"KRİTİK HATA: Motorlar başlatılamadı: {e}", flush=True)
             sys.exit(1)
@@ -46,43 +54,57 @@ class OxydanAegisV4:
             return val / 1000.0 if val > 1000 else val
         except: return 0.0
 
-    def calculate_smart_time(self, t, inc, board):
-        move_num = board.fullmove_number if board else 1
+    def calculate_smart_time(self, t, inc, board, last_eval=None):
+        """Zamanı sadece bölmez, pozisyonun riskine ve eval trendine göre esnetir."""
+        move_num = board.fullmove_number
+        pieces = len(board.piece_map())
         
-        # --- 1. LYNX SAVUNMASI (Acil Durum Refleksi) ---
-        # 3 saniyenin altında kalite yerine hıza odaklan (instamove etkisi)
-        if t < 3.0:
-            return 0.05 if t > 1.0 else 0.02
+        # 1. KRİTİK DURUM: 2 saniyenin altı (Panik modu)
+        if t < 2.0: 
+            return max(0.05, inc - 0.1 if inc > 0.1 else 0.05)
 
-        # --- 2. TEMPOYA GÖRE MTG (Moves To Go) ---
-        if t > 600: mtg = 45   # Classical (10 dk+)
-        elif t > 180: mtg = 35 # Rapid/Blitz
-        else: mtg = 25         # Blitz/Bullet
+        # 2. DİNAMİK MTG (Moves To Go - Kalan hamle tahmini)
+        mtg = 40 if move_num < 30 else (30 if pieces > 12 else 20)
+        base_time = (t / mtg) + (inc * 0.7)
+
+        # 3. POZİSYONEL ZEKİ ZAMANLAMA
+        multiplier = 1.0
+        if last_eval:
+            if last_eval < -1.5: multiplier = 1.4  # Kötü durumdayız, kurtuluş ara
+            elif last_eval > 3.0: multiplier = 0.8 # Çok öndeyiz, vakit kaybetme
+
+        # 4. KARMAŞIKLIK AYARI
+        legal_count = board.legal_moves.count()
+        if legal_count == 1: return 0.1
+        if legal_count > 35: multiplier *= 1.2
+
+        target = base_time * multiplier
+        # Güvenlik sınırı: Tek hamlede ana sürenin %10'unu geçme
+        return max(0.1, min(target, t * 0.10))
+
+    def check_game_end_conditions(self, game_id, board):
+        """Oyunun gidişatına göre terk etme veya beraberlik kararı verir."""
+        hist_data = self.game_histories.get(game_id, {})
+        hist = hist_data.get("eval_history", [])
+        if len(hist) < 6: return None
         
-        # Oyunun sonuna doğru (60+ hamle) daha da hızlan
-        if move_num > 60: mtg = max(15, mtg - 10)
-
-        # --- 3. BÜTÇE VE KARMAŞIKLIK ---
-        base_budget = (t / mtg) + (inc * 0.85)
+        last_evals = hist[-6:] # Son 3 tam hamle
         
-        legal_moves = board.legal_moves.count()
-        complexity = 1.3 if legal_moves > 40 else (0.7 if legal_moves < 15 else 1.0)
+        # 🏳️ TERK ETME: Son 6 kayıtta durum -10'un altındaysa
+        if all(e < -10.0 for e in last_evals):
+            return "resign"
         
-        target_time = base_budget * complexity
+        # 🤝 BERABERLİK: Taşlar az ve eval sıfıra çakılmışsa
+        if len(board.piece_map()) <= 10 and all(abs(e) < 0.15 for e in last_evals):
+            return "draw"
+            
+        return None
 
-        # --- 4. GÜVENLİK SINIRLARI ---
-        if t < 10.0:
-            target_time = min(target_time, t / 45)
-            min_think = 0.05
-        else:
-            min_think = 0.3 if t > 30 else 0.1
+    def get_best_move(self, game_id, board, wtime, btime, winc, binc):
+        # Geçmiş kaydı başlat
+        if game_id not in self.game_histories:
+            self.game_histories[game_id] = {"eval_history": [], "last_score": 0}
 
-        max_limit = t * 0.15 # Tek hamlede bütçenin %15'inden fazlasını harcama
-        
-        final_time = max(min_think, min(target_time, max_limit))
-        return max(0.01, final_time - 0.1) # 100ms ağ gecikme payı
-
-    def get_best_move(self, board, wtime, btime, winc, binc):
         # 1. Kitap Kontrolü
         if os.path.exists(self.book_path):
             try:
@@ -101,8 +123,8 @@ class OxydanAegisV4:
                     if data.get("moves"): return chess.Move.from_uci(data["moves"][0]["uci"])
             except: pass
 
-        # 3. Motor Hesaplama (Havuzdan motor çağırarak)
-        engine = self.engine_pool.get() # Boştaki motoru al
+        # 3. Motor Hesaplama
+        engine = self.engine_pool.get()
         try:
             my_time = wtime if board.turn == chess.WHITE else btime
             my_inc = winc if board.turn == chess.WHITE else binc
@@ -110,30 +132,36 @@ class OxydanAegisV4:
             t_sec = self.to_seconds(my_time)
             i_sec = self.to_seconds(my_inc)
             
-            think_time = self.calculate_smart_time(t_sec, i_sec, board)
+            last_score = self.game_histories[game_id]["last_score"]
+            think_time = self.calculate_smart_time(t_sec, i_sec, board, last_score)
             
-            limit = chess.engine.Limit(time=think_time)
-            result = engine.play(board, limit)
+            # play() ile info alıyoruz (Eval takibi için)
+            result = engine.play(board, chess.engine.Limit(time=think_time))
+            
+            # Eval Skorunu Kaydet
+            if result.info and "score" in result.info:
+                score_val = result.info["score"].relative.score(mate_score=10000)
+                if score_val is not None:
+                    actual_score = score_val / 100.0
+                    self.game_histories[game_id]["eval_history"].append(actual_score)
+                    self.game_histories[game_id]["last_score"] = actual_score
+            
             return result.move
         except Exception as e:
             print(f"Motor Hatası: {e}")
             return next(iter(board.legal_moves)) if board.legal_moves else None
         finally:
-            self.engine_pool.put(engine) # İş bitince motoru havuza iade et
-                
+            self.engine_pool.put(engine)
+
 def handle_game(client, game_id, bot, my_id):
     try:
-        # Hızlı etkileşim: Lichess'e botun aktif olduğunu bildirmek için hemen mesaj atıyoruz
-        client.bots.post_message(game_id, "Oxydan v4 is ready. Good luck!")
+        client.bots.post_message(game_id, "Oxydan Aegis v4: Intelligent Logic & Defense Engaged.")
         stream = client.bots.stream_game_state(game_id)
         my_color = None
         board = chess.Board()
 
         for state in stream:
-            # Lichess hata dönerse (429 gibi) akışı durdur
-            if 'error' in state:
-                print(f"[{game_id}] Akış hatası: {state['error']}")
-                break
+            if 'error' in state: break
 
             if state['type'] == 'gameFull':
                 my_color = chess.WHITE if state['white'].get('id') == my_id else chess.BLACK
@@ -141,7 +169,6 @@ def handle_game(client, game_id, bot, my_id):
                 moves = curr_state.get('moves', "").split()
                 board = chess.Board()
                 for m in moves: board.push_uci(m)
-                
             elif state['type'] == 'gameState':
                 curr_state = state
                 moves_list = curr_state.get('moves', "").split()
@@ -149,152 +176,87 @@ def handle_game(client, game_id, bot, my_id):
                     last_move = moves_list[-1]
                     if not board.move_stack or board.peek().uci() != last_move:
                         board.push_uci(last_move)
-            else: 
-                continue
+            else: continue
 
-            # Oyun bittiyse veya iptal edildiyse döngüden çık
             if curr_state.get('status') in ['mate', 'resign', 'draw', 'outoftime', 'aborted']:
-                print(f"[{game_id}] Oyun bitti/iptal edildi. Durum: {curr_state.get('status')}")
+                if game_id in bot.game_histories: del bot.game_histories[game_id]
                 break
 
             if board.turn == my_color and not board.is_game_over():
-                wtime = curr_state.get('wtime')
-                btime = curr_state.get('btime')
-                winc = curr_state.get('winc')
-                binc = curr_state.get('binc')
+                # Diplomatik Karar Kontrolü (Resign/Draw)
+                decision = bot.check_game_end_conditions(game_id, board)
+                if decision == "resign":
+                    client.bots.resign_game(game_id)
+                    print(f"🏳️ [{game_id}] Umutsuz konum, terk edildi.")
+                    break
+                elif decision == "draw":
+                    client.bots.offer_draw(game_id)
+                    print(f"🤝 [{game_id}] Beraberlik teklif edildi.")
 
-                move = bot.get_best_move(board, wtime, btime, winc, binc)
+                # Hamle Yapma
+                move = bot.get_best_move(game_id, board, curr_state.get('wtime'), curr_state.get('btime'), curr_state.get('winc'), curr_state.get('binc'))
                 
                 if move:
-                    # Hamle yaparken hata alınırsa (network/limit) 5 kez deniyoruz
-                    for attempt in range(5):
+                    for attempt in range(3):
                         try:
                             client.bots.make_move(game_id, move.uci())
                             break 
-                        except Exception as e:
-                            print(f"[{game_id}] Hamle deneme {attempt+1} hatası: {e}")
-                            time.sleep(1) # Hata anında API'yi dinlendir
+                        except:
+                            time.sleep(0.5)
 
     except Exception as e:
         print(f"Oyun Hatası ({game_id}): {e}", flush=True)
 
+def handle_game_wrapper(client, game_id, bot, my_id, active_games):
+    try:
+        handle_game(client, game_id, bot, my_id)
+    finally:
+        active_games.discard(game_id)
+        print(f"✅ [{game_id}] Slot boşaltıldı. Kalan: {len(active_games)}", flush=True)
+
 def main():
-    # Botun tam başlangıç zamanını kaydet
     start_time = time.time()
-    
     try:
         with open("config.yml", "r") as f:
             config = yaml.safe_load(f)
-    except Exception as e:
-        print(f"HATA: config.yml okunamadı: {e}")
-        return
+    except: return
 
     session = berserk.TokenSession(TOKEN)
     client = berserk.Client(session=session)
     try:
         my_id = client.account.get()['id']
-    except Exception as e:
-        print(f"Lichess bağlantısı kurulamadı: {e}")
-        return
+    except: return
 
     bot = OxydanAegisV4(EXE_PATH, uci_options=config.get('engine', {}).get('uci_options', {}))
-    print(f"🚀 Oxydan v4 Stabil Başlatıldı. ID: {my_id}", flush=True)
-
-    # --- YENİ: ÇOKLU OYUN TAKİBİ ---
     active_games = set() 
     
     if config.get("matchmaking"):
         mm = Matchmaker(client, config, active_games) 
         threading.Thread(target=mm.start, daemon=True).start()
     
-    # --- ANA DÖNGÜ ---
     while True:
         try:
             elapsed = time.time() - start_time
-            
-            # 5 saat 55 dakika dolduysa tamamen kapat (Güvenli çıkış)
-            if elapsed > 21300:
-                print("🛑 KRİTİK ZAMAN: 6 saat sınırına ulaşıldı. Kapatılıyor.", flush=True)
-                sys.exit(0)
+            if elapsed > 21300: sys.exit(0)
 
-            # Lichess event akışını dinle
             for event in client.bots.stream_incoming_events():
-                current_elapsed = time.time() - start_time
-                
-                # --- 1. GÜVENLİK DUVARI: SERT SLOT KONTROLÜ ---
-                # Eğer 2 maç zaten varsa, yeni gelen her şeyi anında reddet (Sistem taşmasın)
-                if len(active_games) >= 2:
-                    if event['type'] == 'challenge':
-                        client.challenges.decline(event['challenge']['id'], reason='later')
-                    continue
-
-                # 1. MEYDAN OKUMA KONTROLÜ (Challenge)
+                curr_elapsed = time.time() - start_time
                 if event['type'] == 'challenge':
-                    challenge = event['challenge']
-                    challenge_id = challenge['id']
-                    
-                    tc = challenge.get('timeControl', {})
-                    limit = tc.get('limit', 0)
-                    
-                    is_long_request = limit >= 600  # 10 dk ve üzeri (Rapid/Klasik)
-                    
-                    # MEVCUT KURALLARIN KORUNMASI:
-                    # 1. KURAL: 5. saatten sonra asla uzun maç kabul etme
-                    if is_long_request and current_elapsed > 18000:
-                        client.challenges.decline(challenge_id, reason='later')
-                        print(f"🚫 5. saat doldu, uzun maç reddedildi: {challenge_id}")
-                        continue
-
-                    # 2. KURAL: Kapanışa 15 dk kala hiçbir maçı kabul etme
-                    if current_elapsed > 20700:
-                        client.challenges.decline(challenge_id, reason='later')
-                        continue
-
-                    # 3. KURAL: Uzun maç slot kontrolü (Max 1 adet)
-                    ongoing_games = client.games.get_ongoing()
-                    long_game_count = sum(1 for g in ongoing_games if g['speed'] in ['rapid', 'classical'])
-
-                    if is_long_request and long_game_count >= 1:
-                        client.challenges.decline(challenge_id, reason='later')
-                    elif len(active_games) < 2:
-                        client.challenges.accept(challenge_id)
+                    ch_id = event['challenge']['id']
+                    if len(active_games) >= 2 or curr_elapsed > 20700:
+                        client.challenges.decline(ch_id, reason='later')
                     else:
-                        client.challenges.decline(challenge_id, reason='later')
+                        client.challenges.accept(ch_id)
 
-                # 2. MAÇ BAŞLAMA KONTROLÜ (Game Start)
                 elif event['type'] == 'gameStart':
-                    game_id = event['game']['id']
-                    # Sadece boş slotumuz varsa thread başlat
-                    if game_id not in active_games and len(active_games) < 2:
-                        active_games.add(game_id)
-                        threading.Thread(
-                            target=handle_game_wrapper, 
-                            args=(client, game_id, bot, my_id, active_games),
-                            daemon=True
-                        ).start()
+                    g_id = event['game']['id']
+                    if g_id not in active_games and len(active_games) < 2:
+                        active_games.add(g_id)
+                        threading.Thread(target=handle_game_wrapper, args=(client, g_id, bot, my_id, active_games), daemon=True).start()
                 
-                # Zaman kontrolü (İç döngüden çıkış)
-                if current_elapsed > 21300:
-                    break
-
+                if curr_elapsed > 21300: break
         except Exception as e:
-            # 429 (API Limiti) hatası alınırsa botu 2 dakika tamamen sustur
-            if "429" in str(e):
-                print("🚨 API LİMİTİ AŞILDI! 2 Dakika zorunlu uyku modu...", flush=True)
-                time.sleep(120)
-            else:
-                print(f"⚠️ Ana döngü hatası: {e}, 10sn bekleniyor...")
-                time.sleep(10)
-
-def handle_game_wrapper(client, game_id, bot, my_id, active_games):
-    """Oyun bittiğinde active_games listesinden game_id'yi silen yardımcı fonksiyon."""
-    try:
-        handle_game(client, game_id, bot, my_id)
-    except Exception as e:
-        print(f"[{game_id}] handle_game hatası: {e}", flush=True)
-    finally:
-        active_games.discard(game_id)
-        print(f"✅ [{game_id}] Slot boşaltıldı. Kalan aktif maç: {len(active_games)}", flush=True)
+            time.sleep(10)
 
 if __name__ == "__main__":
     main()

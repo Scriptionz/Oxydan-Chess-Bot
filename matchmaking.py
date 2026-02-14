@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 # ==========================================================
 SETTINGS = {
     "RATED_MODE": True,          # True: Puanlı, False: Puansız (Test için False kalmalı)
-    "MAX_PARALLEL_GAMES": 3,     # Aynı anda kaç maç yapılsın? (GitHub için 1 önerilir)
+    "MAX_PARALLEL_GAMES": 2,     # Aynı anda kaç maç yapılsın? (GitHub için 1 önerilir)
     "MIN_RATING": 1500,          # Rakip minimum kaç elo olsun?
     "MAX_RATING": 4000,          # Rakip maksimum kaç elo olsun?
     "SAFETY_LOCK_TIME": 20,      # Davet attıktan sonra kaç saniye dondurulsun? (Beton Fren)

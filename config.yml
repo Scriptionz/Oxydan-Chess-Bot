@@ -35,7 +35,7 @@ challenge_policy:
 
 # --- MATCHMAKING (BİZİM MEYDAN OKUMALARIMIZ) ---
 matchmaking:
-  allow_feed: true
+  allow_feed: false
   challenge_interval: 60  # Daha ağırbaşlı ve seçici maç arama aralığı
   challenge_timeout: 30
   max_games: 2            # 2 motorlu sistemin ana sınırı

@@ -15,7 +15,7 @@ class Matchmaker:
         # Elo Sınırları
         self.min_rating = self.config.get("min_rating", 2000)
         self.max_rating = self.config.get("max_rating", 4000)
-        self.max_parallel_games = 1 # v4 için eş zamanlı maç sınırı
+        self.max_parallel_games = 2 # v4 için eş zamanlı maç sınırı
         
         self.bot_pool = []
         self.blacklist = {}

@@ -98,7 +98,7 @@ class Matchmaker:
                 continue
 
             # 2. Maç Sayısı Kontrolü
-            if len(self.active_games) >= SETTINGS["MAX_PARALLE_GAMES"]:
+            if len(self.active_games) >= SETTINGS["MAX_PARALLEL_GAMES"]:
                 time.sleep(20)
                 continue
 

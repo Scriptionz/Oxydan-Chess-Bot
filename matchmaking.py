@@ -158,6 +158,7 @@ def _get_valid_target(self):
                         clock_increment=t_inc
                     )
                     print(f"[Matchmaker] -> {target} ({tc}) Gönderildi. Slot: {len(self.active_games)}/2")
+                    time.sleep(2)
                     
                     # --- AKILLI BEKÇİ (v7 ANTI-ABORT & PARALEL) ---
                     watch_start = time.time()

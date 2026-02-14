@@ -1,31 +1,36 @@
 name: Oxydan Lichess Bot
 
 on:
-  workflow_dispatch: # Manuel başlatma butonu
+  workflow_dispatch: # Manuel başlatma
   schedule:
-    - cron: '0 */6 * * *' # Her 6 saatte bir GitHub botu otomatik uyandırır
+    - cron: '0 */6 * * *' # Her 6 saatte bir otomatik başlar
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     steps:
-      - name: Kodlari Cek (LFS Destekli)
+      - name: Kodlari Cek
         uses: actions/checkout@v4
-        with:
-          lfs: true
-
-      - name: LFS Dosyalarini Tamamen Indir
-        run: git lfs pull
-
-      - name: Kitap Dosyasini Dogrula (Debug)
-        run: |
-          echo "--- DOSYA KONTROLU ---"
-          ls -lh ./M11.2.bin || echo "UYARI: Kitap dosyası bulunamadı!"
+        # LFS: true satırını sildik, artık ihtiyacımız yok
 
       - name: Python Kurulumu
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
+
+      - name: Cerebellum Kitabini Indir ve Kur
+        run: |
+          echo "📚 Devasa açılış kitabı indiriliyor..."
+          # Release linkini kullanarak ZIP dosyasını çekiyoruz
+          curl -L "https://github.com/Scriptionz/Oxydan-Chess-Bot/releases/download/v1_Book/Cerebellum3Merge.zip" -o book.zip
+          
+          echo "📂 ZIP'ten çıkarılıyor..."
+          unzip book.zip
+          
+          # Dosya adını kodun tanıması için 'book.bin' yapıyoruz
+          mv Cerebellum3Merge.bin book.bin
+          
+          echo "✅ Kitap hazır: $(ls -lh book.bin)"
 
       - name: Motoru Derle
         run: |
@@ -41,11 +46,6 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Oxydan Self-Check
-        run: |
-          echo "🤖 Botun beyin fonksiyonları test ediliyor..."
-          python check_bot.py || echo "Check dosyası atlandı..."
-
       - name: Motor Test (UCI Testi)
         run: |
           chmod +x ./src/Ethereal
@@ -58,6 +58,5 @@ jobs:
           # Config dosyasındaki token yer tutucusunu güncelle
           sed -i "s/\$LICHESS_TOKEN/$LICHESS_TOKEN/g" config.yml || echo "Config hatasi!"
           
-          # Botu başlat (5 saat 55 dakika sonra kapanacak)
-          # 'for' döngüsü yerine doğrudan başlatıyoruz, hata alırsa Actions zaten log tutar
+          # Botu başlat
           python -u lichess-bot.py

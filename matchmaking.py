@@ -9,169 +9,180 @@ class Matchmaker:
         self.config_all = config
         self.config = config.get("matchmaking", {})
         self.enabled = self.config.get("allow_feed", True)
-        self.active_games = active_games  
+        self.active_games = active_games  # Ana koddaki set'e referans
         self.my_id = None
         
-        # Ayarlar
+        # Elo Sınırları
         self.min_rating = self.config.get("min_rating", 2000)
         self.max_rating = self.config.get("max_rating", 4000)
-        self.max_parallel_games = 2 
+        self.max_parallel_games = 2 # v4 için eş zamanlı maç sınırı
         
-        # Havuz ve Takip
         self.bot_pool = []
-        self.blacklist = {} # {bot_id: expire_time}
-        self.pending_challenges = {} # {target_id: sent_time} - Askıda kalanları temizlemek için
+        self.blacklist = {}
         self.last_pool_update = 0
-        self.pool_timeout = 7200 
+        self.pool_timeout = 3600 
         self.consecutive_429s = 0
 
         self._initialize_id()
 
     def _initialize_id(self):
-        while not self.my_id:
-            try:
-                self.my_id = self.client.account.get()['id']
-                print(f"🤖 [Matchmaker] Kimlik Doğrulandı: {self.my_id}")
-            except Exception:
-                time.sleep(15)
-
-    def _cleanup_expired_data(self):
-        """Hafıza temizliği ve askıda kalan challenge kontrolü."""
-        now = datetime.now()
-        # Kara listeyi temizle
-        self.blacklist = {k: v for k, v in self.blacklist.items() if v > now}
-        
-        # 5 dakikadan uzun süredir cevap gelmeyen challenge'ları iptal et (Slot açmak için)
-        to_cancel = [tid for tid, sent_time in self.pending_challenges.items() 
-                     if (now - sent_time).total_seconds() > 300]
-        for target in to_cancel:
-            print(f"🧹 [Matchmaker] Cevapsız meydan okuma temizlendi: {target}")
-            del self.pending_challenges[target]
+        """Hesap bilgilerini güvenli bir şekilde çeker."""
+        try:
+            self.my_id = self.client.account.get()['id']
+            print(f"[Matchmaker] Sistem Hazır. ID: {self.my_id} | Hedef: {self.min_rating}-{self.max_rating}")
+        except Exception as e:
+            print(f"[Matchmaker] Kritik Hata: Kimlik doğrulanamadı. {e}")
+            self.my_id = "oxydan" # Yedek
 
     def _refresh_bot_pool(self):
+        """Lichess'ten online bot listesini çeker."""
         now = time.time()
+        # Liste boşsa veya süre dolduysa güncelle
         if not self.bot_pool or (now - self.last_pool_update > self.pool_timeout):
             try:
-                print("🔄 [Matchmaker] Bot havuzu tazeleniyor...")
-                time.sleep(random.uniform(5, 10)) # API'ye nefes aldır
+                print("[Matchmaker] Bot listesi güncelleniyor...", flush=True)
+                # get_online_bots() generator döndürür, islice ile sınırlıyoruz
                 stream = self.client.bots.get_online_bots()
-                # Daha seçici havuz (Sadece aktif ve oynamaya hazır görünebilecek 60 bot)
-                online_bots = list(itertools.islice(stream, 60))
+                online_bots = list(itertools.islice(stream, 100))
                 
-                self.bot_pool = [b.get('id') for b in online_bots 
-                                if b.get('id') and b.get('id').lower() != self.my_id.lower()]
+                # Kendimizi ve pasifleri ayıklayarak listeyi oluştur
+                self.bot_pool = [b.get('id') for b in online_bots if b.get('id') and b.get('id').lower() != self.my_id.lower()]
                 random.shuffle(self.bot_pool)
                 self.last_pool_update = now
-                self.consecutive_429s = 0 
+                self.consecutive_429s = 0 # Başarılı istekte hata sayacını sıfırla
             except Exception as e:
+                print(f"[Matchmaker] Liste çekilemedi: {e}")
                 self._handle_rate_limit(e)
 
     def _handle_rate_limit(self, error):
-        self.consecutive_429s += 1
-        wait_time = 1800 * self.consecutive_429s # 30dk, 60dk...
-        print(f"🚨 [LICHESS BAN KORUMASI] 429 Alındı. {wait_time//60} dk tam sessizlik...")
-        time.sleep(wait_time)
+        """429 Too Many Requests hatasını yönetir."""
+        if "429" in str(error):
+            self.consecutive_429s += 1
+            wait_time = 600 * self.consecutive_429s # 10, 20, 30... dakika bekle
+            print(f"!!! [API LIMIT] {wait_time//60} dakika zorunlu uyku modu...")
+            time.sleep(wait_time)
+        else:
+            time.sleep(30)
 
-    def _is_bot_suitable(self, target_id):
-        """Bug Koruması: Sadece puan değil, botun durumunu da derinlemesine inceler."""
+    def _check_target_rating(self, target_id):
+        """Botun profilini inceler ve Elo'sunu kontrol eder."""
         try:
-            time.sleep(random.uniform(1.0, 2.5)) # İnsan taklidi gecikme
-            user = self.client.users.get_public_data(target_id)
-            
-            # 1. Engel: Yasaklı veya kapalı hesap
-            if user.get('tosViolation') or user.get('disabled') or user.get('closed'):
-                return False
+            user_data = self.client.users.get_public_data(target_id)
+            if user_data.get('tosViolation') or user_data.get('disabled'):
+                return False, 0
                 
-            # 2. Engel: Bot etiketi yoksa (Sadece botlarla oynamak güvenlidir)
-            if user.get('title') != 'BOT':
-                return False
+            perfs = user_data.get('perfs', {})
+            # Sadece aktif olduğu kategorilere bak (oyun sayısı > 10 olanlar)
+            ratings = []
+            for cat in ['blitz', 'bullet', 'rapid']:
+                perf = perfs.get(cat, {})
+                if perf.get('games', 0) > 10:
+                    ratings.append(perf.get('rating', 0))
+            
+            if not ratings: return False, 0
+            
+            max_r = max(ratings)
+            return (self.min_rating <= max_r <= self.max_rating), max_r
+        except Exception:
+            return False, 0
 
-            # 3. Engel: Rating Kontrolü
-            perfs = user.get('perfs', {})
-            # Sadece oynamak istediğimiz kategorilerin en yükseğine bak
-            relevant_ratings = [p.get('rating') for k, p in perfs.items() 
-                               if k in ['blitz', 'bullet', 'rapid'] and p.get('games', 0) > 20]
+    def _get_valid_target(self):
+        """Hem Elo hem de kara liste kontrolü yaparak rakip seçer."""
+        self._refresh_bot_pool()
+        now = datetime.now()
+        
+        # Süresi dolan yasakları temizle
+        self.blacklist = {k: v for k, v in self.blacklist.items() if v > now}
+        
+        # API'yi yormamak için her döngüde en fazla 5 profili sorgula
+        tried_this_cycle = 0
+        for target in self.bot_pool:
+            if tried_this_cycle >= 5: break
             
-            if not relevant_ratings: return False
-            best_rating = max(relevant_ratings)
+            if target in self.blacklist:
+                continue
             
-            return self.min_rating <= best_rating <= self.max_rating
-        except:
-            return False
+            tried_this_cycle += 1
+            is_suitable, rating = self._check_target_rating(target)
+            
+            if is_suitable:
+                return target
+            else:
+                # Kriter dışı botu 24 saat boyunca bir daha sorma
+                self.blacklist[target] = now + timedelta(hours=24)
+        
+        return None
 
     def start(self):
-        if not self.enabled: return
-        print("🚀 [Matchmaker] Motor çalıştırıldı.")
+        if not self.enabled: 
+            print("[Matchmaker] Devre dışı.")
+            return
+
         start_time = time.time()
 
         while True:
             try:
-                self._cleanup_expired_data()
-                
-                # SLOT KONTROLÜ (Aktif maçlar + henüz kabul edilmemiş ama gönderilmiş olanlar)
-                total_busy_slots = len(self.active_games) + len(self.pending_challenges)
-                if total_busy_slots >= self.max_parallel_games:
-                    time.sleep(30)
+                # 1. SERT SLOT KONTROLÜ (Daha disiplinli)
+                # Aktif oyun sayısı sınırı aşmışsa veya sınıra çok yakınsa bekle
+                if len(self.active_games) >= self.max_parallel_games:
+                    # Slot dolu, agresifliği sıfıra indir
+                    time.sleep(30) 
                     continue
 
-                # ZAMAN KONTROLÜ
+                # 2. Çalışma Süresi Kontrolü (6 saat sınırına yaklaştıysan dur)
                 elapsed = time.time() - start_time
-                if elapsed > 21000: # 5 saat 50 dk
+                if elapsed > 20700: # 5 saat 45 dakika
+                    print("[Matchmaker] Kapanış saati yaklaştı, yeni maç aranmıyor.")
                     time.sleep(600)
                     continue
 
-                self._refresh_bot_pool()
-                
-                # HEDEF SEÇİMİ
-                target = None
-                for potential in self.bot_pool:
-                    if potential in self.blacklist or potential in self.pending_challenges:
-                        continue
-                    if self._is_bot_suitable(potential):
-                        target = potential
-                        break
-                
+                # 3. Hedef rakip bul
+                target = self._get_valid_target()
                 if not target:
                     time.sleep(60)
                     continue
 
-                # ZAMAN KONTROLÜ VE TC SEÇİMİ
+                # --- ZAMAN KONTROLÜ SEÇİMİ (Mevcut mantık korundu) ---
                 dice = random.random()
-                if elapsed > 18000: # Son saatlerde sadece hızlı maç
+                if elapsed > 18000: # 5. saatten sonra sadece hızlı
                     tc_list = ["1+0", "2+1", "3+0"]
                 else:
-                    if dice < 0.10: tc_list = ["10+0", "15+10"] # Klasik
-                    elif dice < 0.30: tc_list = ["5+0", "5+3", "3+2"] # Blitz
-                    else: tc_list = ["1+0", "2+1", "3+0"] # Bullet / SuperBlitz
-
+                    if dice < 0.05: tc_list = ["30+0"]
+                    elif dice < 0.20: tc_list = ["10+0", "10+2"]
+                    else: tc_list = ["1+0", "2+1", "3+0", "3+2", "5+0", "5+2"]
+                
                 tc = random.choice(tc_list)
-                limit, inc = map(int, tc.split('+'))
+                t_limit, t_inc = map(int, tc.split('+'))
 
-                # CHALLENGE GÖNDERİMİ
+                # 4. MEYDAN OKUMA ÖNCESİ SON KONTROL
+                # Tam bu satırda 2. maç başlamış olabilir, tekrar kontrol et
+                if len(self.active_games) >= self.max_parallel_games:
+                    continue
+
+                # 5. Meydan oku
                 try:
-                    # Kara liste: Bu bota 2 saat boyunca bir daha sorma
-                    self.blacklist[target] = datetime.now() + timedelta(hours=2)
-                    self.pending_challenges[target] = datetime.now()
-
+                    # Rakibi 1 saatliğine kara listeye al (spam yapmamak için)
+                    self.blacklist[target] = datetime.now() + timedelta(minutes=60)
+                    
                     self.client.challenges.create(
                         username=target,
                         rated=True,
-                        clock_limit=limit * 60,
-                        clock_increment=inc
+                        clock_limit=t_limit * 60,
+                        clock_increment=t_inc
                     )
-                    print(f"⚔️ [Challenge] -> {target} ({tc}) gönderildi.")
+                    print(f"[Matchmaker] -> {target} ({tc}) Gönderildi. Slot: {len(self.active_games)}/2")
                     
-                    # API Flood önleyici zorunlu bekleme
-                    time.sleep(random.uniform(90, 150)) 
+                    # --- KRİTİK DEĞİŞİKLİK: CHALLENGE SONRASI UYKU ---
+                    # Meydan okuma gönderdikten sonra Lichess'in ve rakibin nefes almasına izin ver.
+                    # Eğer hemen döngüye girerse 2. ve 3. meydan okumayı gönderir ve abort riski doğar.
+                    time.sleep(60) # Karşı tarafın kabul etmesi için 1 dakika bekleme alanı
 
                 except Exception as e:
-                    if "429" in str(e):
+                    if "429" in str(e): 
                         self._handle_rate_limit(e)
                     else:
-                        # Reddedildiyse listeden çıkar ama bekle
-                        if target in self.pending_challenges: del self.pending_challenges[target]
-                        time.sleep(30)
+                        print(f"[Matchmaker] Hata: {target} için challenge gönderilemedi.")
+                        time.sleep(10)
 
             except Exception as e:
-                print(f"⚠️ [Matchmaker Döngü Hatası]: {e}")
-                time.sleep(60)
+                self._handle_rate_limit(e)

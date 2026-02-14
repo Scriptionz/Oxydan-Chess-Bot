@@ -18,7 +18,7 @@ from matchmaking import Matchmaker
 SETTINGS = {
     "TOKEN": os.environ.get('LICHESS_TOKEN'),
     "ENGINE_PATH": "./src/Ethereal",
-    "BOOK_PATH": "./M11.2.bin",
+    "BOOK_PATH": "",
     
     # --- OYUN LİMİTLERİ ---
     "MAX_PARALLEL_GAMES": 2,      # Aynı anda oynanacak maç sayısı
@@ -99,39 +99,59 @@ class OxydanAegisV4:
         return max(0.01, final_time - SETTINGS["LATENCY_BUFFER"])
 
     def get_best_move(self, board, wtime, btime, winc, binc):
-        # 1. Kitap Kontrolü
-        if os.path.exists(self.book_path):
+        # 1. BULUT KİTABI (Lichess Explorer API)
+        # Sadece ilk 20 hamlede ve kitap modu açıksa çalışır
+        if board.fullmove_number <= 20:
             try:
-                with chess.polyglot.open_reader(self.book_path) as reader:
-                    entry = reader.get(board)
-                    if entry: return entry.move
-            except: pass
-
-        # 2. Tablebase (Gereksiz API yükünü önlemek için limitli)
-        if len(board.piece_map()) <= SETTINGS["TABLEBASE_PIECE_LIMIT"]:
-            try:
-                fen = board.fen().replace(" ", "_")
-                r = requests.get(f"https://tablebase.lichess.ovh/standard?fen={fen}", timeout=0.5)
+                # Lichess'in masters ve bot veritabanından en popüler hamleyi çeker
+                # 'topGames=0' ve 'recentGames=0' ile sadece hamle istatistiklerini alıyoruz (hızlıdır)
+                api_url = f"https://explorer.lichess.ovh/bot?fen={board.fen()}"
+                r = requests.get(api_url, timeout=0.8)
+                
                 if r.status_code == 200:
                     data = r.json()
-                    if data.get("moves"): return chess.Move.from_uci(data["moves"][0]["uci"])
-            except: pass
+                    if data.get("moves"):
+                        # En çok kazanma oranına sahip veya en çok oynanan hamleyi al
+                        best_move_uci = data["moves"][0]["uci"]
+                        print(f"📡 Bulut Hamlesi Uygulandı: {best_move_uci} (Hamle: {board.fullmove_number})", flush=True)
+                        return chess.Move.from_uci(best_move_uci)
+            except Exception as e:
+                print(f"⚠️ Bulut Kitap Hatası (Motora geçiliyor): {e}", flush=True)
 
-        # 3. Motor Hesaplama
+        # 2. TABLEBASE (7 taş ve altı için online sorgu)
+        if len(board.piece_map()) <= SETTINGS.get("TABLEBASE_PIECE_LIMIT", 6):
+            try:
+                fen_tb = board.fen().replace(" ", "_")
+                r_tb = requests.get(f"https://tablebase.lichess.ovh/standard?fen={fen_tb}", timeout=0.5)
+                if r_tb.status_code == 200:
+                    data_tb = r_tb.json()
+                    if data_tb.get("moves"):
+                        print(f"🎯 Tablebase Hamlesi: {data_tb['moves'][0]['uci']}", flush=True)
+                        return chess.Move.from_uci(data_tb["moves"][0]["uci"])
+            except:
+                pass
+
+        # 3. MOTOR HESAPLAMA (Kitap bittiğinde veya API yanıt vermediğinde)
         engine = self.engine_pool.get()
         try:
             my_time = wtime if board.turn == chess.WHITE else btime
             my_inc = winc if board.turn == chess.WHITE else binc
+            
             t_sec = self.to_seconds(my_time)
             i_sec = self.to_seconds(my_inc)
             
             think_time = self.calculate_smart_time(t_sec, i_sec, board)
+            
+            # Motor hesaplama limiti
             result = engine.play(board, chess.engine.Limit(time=think_time))
             return result.move
+            
         except Exception as e:
-            print(f"Motor Hatası: {e}")
+            print(f"❌ Motor Hatası: {e}")
+            # Acil durum hamlesi (legal hamlelerden ilkini yap)
             return next(iter(board.legal_moves)) if board.legal_moves else None
         finally:
+            # Motoru her durumda havuza geri ver
             self.engine_pool.put(engine)
 
 def handle_game(client, game_id, bot, my_id):

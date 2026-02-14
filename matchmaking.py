@@ -114,6 +114,10 @@ class Matchmaker:
         start_time = time.time()
 
         while True:
+            if os.path.exists("STOP.txt"):
+                print("🛑 [STOP.txt] Tespit edildi. Yeni maç aranmıyor, mevcutlar bitiriliyor...")
+                time.sleep(60)
+                continue
             try:
                 if len(self.active_games) >= self.max_parallel_games:
                     time.sleep(30) 

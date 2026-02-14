@@ -242,11 +242,11 @@ def main():
     
     print("🚀 Oxydan v7 Sistemi Aktif. Durdurmak için 'STOP' dosyası oluşturun.")
 
-    # --- ZIRHLI STREAM BAŞLANGICI ---
-    def get_stream():
+    # --- KRİTİK DÜZELTME: STREAM'İ YENİLEMEK İÇİN FONKSİYON ---
+    def get_event_stream():
         return client.bots.stream_incoming_events()
 
-    events = get_stream()
+    events = get_event_stream()
 
     while True:
         try:
@@ -255,33 +255,32 @@ def main():
             is_shutting_down = os.path.exists("STOP") or curr_elapsed > 20700
             
             if is_shutting_down:
-                if mm: mm.enabled = False 
+                if mm: mm.enabled = False
                 if len(active_games) == 0:
-                    print("✅ [GÜVENLİ ÇIKIŞ] Aktif maç kalmadı. Sistem kapatılıyor.")
+                    print("✅ [GÜVENLİ ÇIKIŞ] Sistem kapatılıyor.")
                     if os.path.exists("STOP"): os.remove("STOP")
                     os._exit(0)
 
-            # 2. EVENT ÇEKME (Hata Toleranslı)
+            # 2. EVENT ÇEKME (Burayı hataya karşı zırhladık)
             try:
+                # Stream'den bir sonraki olayı almayı dene
                 event = next(events)
             except (StopIteration, Exception) as e:
-                # 404 veya Bağlantı hatası durumunda burası tetiklenir
+                # 404 hatası veya kopma olursa buraya düşer
                 if not is_shutting_down:
                     time.sleep(2)
                     try:
-                        events = get_stream() # Hattı yeniden aç
+                        events = get_event_stream() # Stream'i tamamen baştan oluştur
                     except:
                         pass
-                continue
+                continue # Döngü başına dön, STOP dosyasını kontrol et ve tekrar dene
 
-            # 3. EVENT İŞLEME
+            # 3. GELEN EVENTLERİ İŞLE
             if event['type'] == 'challenge':
                 ch_id = event['challenge']['id']
                 if len(active_games) >= 2 or is_shutting_down:
                     client.challenges.decline(ch_id, reason='later')
                 else:
-                    # Matchmaker tarafından gönderilen challenge'ları beklemene gerek yok
-                    # Ama dışarıdan gelenler için 3 sn beklemek iyidir.
                     time.sleep(2)
                     client.challenges.accept(ch_id)
 
@@ -295,7 +294,8 @@ def main():
                                          daemon=True).start()
 
         except Exception as e:
-            print(f"⚠️ Ana döngü pürüzü: {e}")
+            # Beklenmedik diğer hatalar için
+            print(f"⚠️ Sistem uyarısı: {e}")
             time.sleep(5)
 
 if __name__ == "__main__":

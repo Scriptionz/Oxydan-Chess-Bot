@@ -27,22 +27,15 @@ class OxydanAegisV4:
             cores = os.cpu_count() or 2
             for i in range(2):
                 eng = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=30)
-                
-                base_configs = {
-                    "Hash": 256, 
-                    "Threads": max(1, cores // 2)
-                }
-                
+                base_configs = {"Hash": 256, "Threads": max(1, cores // 2)}
                 for opt, val in base_configs.items():
                     try: eng.configure({opt: val})
                     except: pass
-
                 if uci_options:
                     for opt, val in uci_options.items():
                         if opt.lower() == "ponder": continue
                         try: eng.configure({opt: val})
                         except: pass
-                
                 self.engine_pool.put(eng)
             print(f"🚀 Oxydan v7: Motorlar başarıyla hazırlandı.", flush=True)
         except Exception as e:
@@ -127,18 +120,15 @@ class OxydanAegisV4:
 def handle_game(client, game_id, bot, my_id):
     try:
         client.bots.post_message(game_id, "Oxydan Aegis v4: Intelligent Logic Engaged.")
-        try:
-            stream = client.bots.stream_game_state(game_id)
-        except Exception as e:
-            print(f"❌ Oyun streamine bağlanılamadı: {e}")
-            # Eğer buraya düşüyorsa sorun %100 Lichess yetkilendirmesidir.
-            return
+        # OYUN STREAMI İÇİN EN GÜVENLİ YOL
+        stream = client.bots.stream_game_state(game_id)
         my_color = None
-        board = chess.Board()
-
+        
         for state in stream:
             if 'error' in state: break
-
+            
+            # Her state geldiğinde board'u tazeleyelim (Abort engellemek için)
+            board = chess.Board()
             if state['type'] == 'gameFull':
                 my_color = chess.WHITE if state['white'].get('id') == my_id else chess.BLACK
                 curr_state = state['state']
@@ -146,9 +136,7 @@ def handle_game(client, game_id, bot, my_id):
                 curr_state = state
             else: continue
 
-            # Hamleleri güncelle
             moves_list = curr_state.get('moves', "").split()
-            board = chess.Board()
             for m in moves_list: board.push_uci(m)
 
             if curr_state.get('status') in ['mate', 'resign', 'draw', 'outoftime', 'aborted']:
@@ -160,9 +148,7 @@ def handle_game(client, game_id, bot, my_id):
                 if decision == "resign":
                     client.bots.resign_game(game_id)
                     break
-                elif decision == "draw":
-                    client.bots.offer_draw(game_id)
-
+                
                 move = bot.get_best_move(game_id, board, curr_state.get('wtime'), curr_state.get('btime'), curr_state.get('winc'), curr_state.get('binc'))
                 if move:
                     try: client.bots.make_move(game_id, move.uci())
@@ -182,16 +168,14 @@ def main():
         with open("config.yml", "r") as f: config = yaml.safe_load(f)
     except: return
 
-    # --- KRİTİK 404 FIX: Client Yapılandırması ---
+    # 404 FIX: Base URL'i açıkça belirtiyoruz
     session = berserk.TokenSession(TOKEN)
-    client = berserk.Client(session=session)
+    client = berserk.Client(session=session, base_url="https://lichess.org")
 
     try:
         acc = client.account.get()
         my_id = acc['id']
-        # Eğer hesap bot değilse 404 hatasının sebebi budur
-        if acc.get('title') != 'BOT':
-            print("⚠️ UYARI: Hesabınız BOT olarak işaretlenmemiş! Lichess /api/bot endpoint'lerini reddediyor olabilir.")
+        print(f"🚀 Oxydan v7 Aktif. Kullanıcı: {my_id} (Title: {acc.get('title', 'None')})")
     except Exception as e:
         print(f"❌ Kimlik Hatası: {e}")
         return
@@ -199,59 +183,38 @@ def main():
     bot = OxydanAegisV4(EXE_PATH, uci_options=config.get('engine', {}).get('uci_options', {}))
     active_games = set() 
     
-    mm = None
     if config.get("matchmaking"):
         mm = Matchmaker(client, config, active_games) 
         threading.Thread(target=mm.start, daemon=True).start()
-    
-    print(f"🚀 Oxydan v7 Aktif. Kullanıcı: {my_id}")
 
-    # --- 404'Ü ENGELEYEN STREAM FONKSİYONU ---
-    def get_safe_stream():
-        # bots.stream yerine challenges.stream kullanmak 404 ihtimalini azaltır
-        try:
-            return client.challenges.stream_incoming_events()
-        except Exception as e:
-            print(f"⚠️ Stream başlatılamadı: {e}")
-            return None
-
-    events = get_safe_stream()
-
+    # --- EN SAĞLAM EVENT DÖNGÜSÜ ---
     while True:
         try:
+            # STOP kontrolü
             if os.path.exists("STOP") or (time.time() - start_time) > 20700:
-                if len(active_games) == 0:
-                    print("✅ Güvenli çıkış yapıldı.")
-                    os._exit(0)
+                if not active_games: os._exit(0)
 
-            if events is None:
-                time.sleep(5)
-                events = get_safe_stream()
-                continue
+            # Stream'i her döngüde baştan başlatmak yerine bir kez açıyoruz
+            # client.bots.stream_incoming_events() en garantisidir.
+            for event in client.bots.stream_incoming_events():
+                if event['type'] == 'challenge':
+                    ch_id = event['challenge']['id']
+                    if len(active_games) >= 2:
+                        client.challenges.decline(ch_id, reason='later')
+                    else:
+                        client.challenges.accept(ch_id)
 
-            try:
-                event = next(events)
-            except Exception:
-                time.sleep(2)
-                events = get_safe_stream()
-                continue
-
-            if event['type'] == 'challenge':
-                ch_id = event['challenge']['id']
-                if len(active_games) >= 2:
-                    client.challenges.decline(ch_id, reason='later')
-                else:
-                    client.challenges.accept(ch_id)
-
-            elif event['type'] == 'gameStart':
-                g_id = event['game']['id']
-                if g_id not in active_games:
-                    active_games.add(g_id)
-                    threading.Thread(target=handle_game_wrapper, args=(client, g_id, bot, my_id, active_games), daemon=True).start()
-
+                elif event['type'] == 'gameStart':
+                    g_id = event['game']['id']
+                    if g_id not in active_games:
+                        active_games.add(g_id)
+                        threading.Thread(target=handle_game_wrapper, args=(client, g_id, bot, my_id, active_games), daemon=True).start()
+        
         except Exception as e:
-            print(f"⚠️ Hata: {e}")
-            time.sleep(5)
+            # 404 veya Bağlantı hatası olursa 10 saniye bekle ve baştan dene
+            wait = 10 if "404" in str(e) else 3
+            print(f"⚠️ Bağlantı hatası ({wait}s sonra denenecek): {e}")
+            time.sleep(wait)
 
 if __name__ == "__main__":
     main()

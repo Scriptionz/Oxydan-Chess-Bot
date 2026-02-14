@@ -242,38 +242,47 @@ def main():
     
     print("🚀 Oxydan v7 Sistemi Aktif. Durdurmak için 'STOP' dosyası oluşturun.")
 
-    # Event stream'i bir değişken olarak dışarı alıyoruz
-    events = client.bots.stream_incoming_events()
+    # --- ZIRHLI STREAM BAŞLANGICI ---
+    def get_stream():
+        return client.bots.stream_incoming_events()
+
+    events = get_stream()
 
     while True:
         try:
-            # 1. KRİTİK KONTROL: Kapatma sinyali var mı?
+            # 1. STOP VE SÜRE KONTROLÜ
             curr_elapsed = time.time() - start_time
             is_shutting_down = os.path.exists("STOP") or curr_elapsed > 20700
             
             if is_shutting_down:
-                if mm: mm.enabled = False # Yeni meydan okuma atmayı kes
+                if mm: mm.enabled = False 
                 if len(active_games) == 0:
                     print("✅ [GÜVENLİ ÇIKIŞ] Aktif maç kalmadı. Sistem kapatılıyor.")
                     if os.path.exists("STOP"): os.remove("STOP")
                     os._exit(0)
 
-            # 2. EVENT KONTROLÜ (Bloklamayı kırmak için next() kullanımı)
+            # 2. EVENT ÇEKME (Hata Toleranslı)
             try:
-                # stream'den bir sonraki olayı al, 1 saniye bekle (bloklamayı azaltır)
                 event = next(events)
-            except (StopIteration, Exception):
-                # Eğer yeni event yoksa döngü başına dön ve STOP dosyasını tekrar kontrol et
-                time.sleep(1)
+            except (StopIteration, Exception) as e:
+                # 404 veya Bağlantı hatası durumunda burası tetiklenir
+                if not is_shutting_down:
+                    time.sleep(2)
+                    try:
+                        events = get_stream() # Hattı yeniden aç
+                    except:
+                        pass
                 continue
 
-            # 3. GELEN EVENTLERİ İŞLE
+            # 3. EVENT İŞLEME
             if event['type'] == 'challenge':
                 ch_id = event['challenge']['id']
                 if len(active_games) >= 2 or is_shutting_down:
                     client.challenges.decline(ch_id, reason='later')
                 else:
-                    time.sleep(3)
+                    # Matchmaker tarafından gönderilen challenge'ları beklemene gerek yok
+                    # Ama dışarıdan gelenler için 3 sn beklemek iyidir.
+                    time.sleep(2)
                     client.challenges.accept(ch_id)
 
             elif event['type'] == 'gameStart':
@@ -286,12 +295,8 @@ def main():
                                          daemon=True).start()
 
         except Exception as e:
-            # Bağlantı kopması durumunda stream'i tazelemek gerekebilir
-            print(f"⚠️ Bağlantı hatası veya Stream kesildi: {e}")
+            print(f"⚠️ Ana döngü pürüzü: {e}")
             time.sleep(5)
-            # Stream'i yeniden başlatmayı dene
-            try: events = client.bots.stream_incoming_events()
-            except: pass
 
 if __name__ == "__main__":
     main()

@@ -18,7 +18,7 @@ from matchmaking import Matchmaker
 SETTINGS = {
     "TOKEN": os.environ.get('LICHESS_TOKEN'),
     "ENGINE_PATH": "./src/Ethereal",
-    "BOOK_PATH": "",
+    "BOOK_PATH": "./book.bin",
     
     # --- OYUN LİMİTLERİ ---
     "MAX_PARALLEL_GAMES": 2,      # Aynı anda oynanacak maç sayısı
@@ -31,7 +31,7 @@ SETTINGS = {
     "MIN_THINK_TIME": 0.05,       # En az düşünme süresi
     
     # --- MESAJLAR ---
-    "GREETING": "Oxydan Aegis v7 InDev Active. System stabilized.",
+    "GREETING": "Oxydan v7 InDev Active. System stabilized.",
 }
 # ==========================================================
 
@@ -53,7 +53,7 @@ class OxydanAegisV4:
                         try: eng.configure({opt: val})
                         except: pass
                 self.engine_pool.put(eng)
-            print(f"🚀 Oxydan v4.2: {pool_size} Motor Ünitesi Havuza Alındı.", flush=True)
+            print(f"🚀 Oxydan v7: {pool_size} Motor Ünitesi Havuza Alındı.", flush=True)
         except Exception as e:
             print(f"KRİTİK HATA: Motorlar başlatılamadı: {e}", flush=True)
             sys.exit(1)
@@ -99,24 +99,79 @@ class OxydanAegisV4:
         return max(0.01, final_time - SETTINGS["LATENCY_BUFFER"])
 
     def get_best_move(self, board, wtime, btime, winc, binc):
-        # 1. BULUT KİTABI (Lichess Explorer API)
-        # Sadece ilk 20 hamlede ve kitap modu açıksa çalışır
-        if board.fullmove_number <= 20:
+        """
+        Oxydan Bot Hamle Karar Mekanizması:
+        1. Cerebellum Book (.bin) -> Açılış
+        2. Syzygy API -> Oyun Sonu (<= 6 taş)
+        3. Ethereal Engine -> Orta Oyun
+        """
+        
+        if os.path.exists(SETTINGS["BOOK_PATH"]):
             try:
-                # Lichess'in masters ve bot veritabanından en popüler hamleyi çeker
-                # 'topGames=0' ve 'recentGames=0' ile sadece hamle istatistiklerini alıyoruz (hızlıdır)
-                api_url = f"https://explorer.lichess.ovh/bot?fen={board.fen()}"
-                r = requests.get(api_url, timeout=0.8)
+                with chess.polyglot.open_reader(SETTINGS["BOOK_PATH"]) as reader:
+                    best_entry = None
+                    # Tahtadaki konum için tüm hamleleri tara, en yüksek ağırlıklıyı seç
+                    for entry in reader.find_all(board):
+                        if best_entry is None or entry.weight > best_entry.weight:
+                            best_entry = entry
+                    
+                    if best_entry:
+                        print(f"📖 Cerebellum Kitap Hamlesi: {best_entry.move} (W: {best_entry.weight})", flush=True)
+                        return best_entry.move
+            except Exception as e:
+                print(f"⚠️ Kitap okunurken hata: {e}", flush=True)
+
+        # --- 2. ADIM: AKILLI SYZYGY TABLEBASE (Oyun Sonu) ---
+        try:
+            # Sıradaki oyuncunun kalan süresini al (milisaniyeden saniyeye çevir)
+            current_time_ms = wtime if board.turn == chess.WHITE else btime
+            current_time_sec = self.to_seconds(current_time_ms)
+            
+            # Strateji: 30 saniyeden fazla süre varsa 7 taş, azsa 6 taş sorgula
+            syzygy_limit = 7 if current_time_sec > 30 else 6
+            
+            if len(board.piece_map()) <= syzygy_limit:
+                fen = board.fen().replace(" ", "_")
+                # Süre azaldıkça API'yi bekleme süresini (timeout) de kısaltıyoruz
+                api_timeout = 0.5 if current_time_sec > 10 else 0.3
+                
+                r = requests.get(f"https://tablebase.lichess.ovh/standard?fen={fen}", timeout=api_timeout)
                 
                 if r.status_code == 200:
                     data = r.json()
-                    if data.get("moves"):
-                        # En çok kazanma oranına sahip veya en çok oynanan hamleyi al
-                        best_move_uci = data["moves"][0]["uci"]
-                        print(f"📡 Bulut Hamlesi Uygulandı: {best_move_uci} (Hamle: {board.fullmove_number})", flush=True)
-                        return chess.Move.from_uci(best_move_uci)
-            except Exception as e:
-                print(f"⚠️ Bulut Kitap Hatası (Motora geçiliyor): {e}", flush=True)
+                    if "moves" in data and len(data["moves"]) > 0:
+                        tb_move_uci = data["moves"][0]["uci"]
+                        print(f"🧩 Syzygy ({syzygy_limit}-Piece) Hamlesi: {tb_move_uci}", flush=True)
+                        return chess.Move.from_uci(tb_move_uci)
+        except Exception as e:
+            # API yavaşsa veya hata verirse vakit kaybetmeden motora pasla
+            print(f"⚠️ Syzygy atlandı (Hata veya Zaman Aşımı): {e}", flush=True)
+
+        # --- 3. ADIM: MOTOR HESAPLAMA (Ethereal) ---
+        # Eğer kitapta hamle yoksa veya oyun sonuna girilmemişse motor devreye girer
+        engine = self.engine_pool.get()
+        try:
+            # Sıra kimdeyse onun süresini ve artışını (inc) al
+            my_time = wtime if board.turn == chess.WHITE else btime
+            my_inc = winc if board.turn == chess.WHITE else binc
+            
+            # Daha önce tanımladığın akıllı zaman yönetimi fonksiyonu (calculate_smart_time)
+            # Eğer o fonksiyonun adını değiştirdiysen burayı da güncelle.
+            think_time = self.calculate_smart_time(self.to_seconds(my_time), self.to_seconds(my_inc), board)
+            
+            # Motoru belirtilen süre sınırıyla çalıştır
+            result = engine.play(board, chess.engine.Limit(time=think_time))
+            
+            print(f"⚙️ Motor Hamlesi: {result.move} (Süre: {think_time:.2f}s)", flush=True)
+            return result.move
+            
+        except Exception as e:
+            print(f"🚨 Motor hatası: {e}", flush=True)
+            # Motor hata verirse bile botun çökmemesi için rastgele bir hamle döndür (acil durum)
+            return list(board.legal_moves)[0]
+        finally:
+            # Motoru havuza geri bırak
+            self.engine_pool.put(engine)
 
         # 2. TABLEBASE (7 taş ve altı için online sorgu)
         if len(board.piece_map()) <= SETTINGS.get("TABLEBASE_PIECE_LIMIT", 6):

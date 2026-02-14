@@ -58,9 +58,13 @@ class Matchmaker:
                 time.sleep(10)
 
     def _is_stop_triggered(self):
-        """STOP.txt kontrolünü yapar."""
-        stop_path = os.path.join(os.getcwd(), SETTINGS["STOP_FILE"])
-        return os.path.exists(stop_path)
+        """STOP.txt kontrolü yapar ve aktif maç yoksa sistemi tamamen kapatır."""
+        if os.path.exists(SETTINGS["STOP_FILE"]):
+            if len(self.active_games) == 0:
+                print(f"🏁 [Matchmaker] Maç kalmadı. {SETTINGS['STOP_FILE']} gereği sistem kapatılıyor.")
+                os._exit(0)  # GitHub Actions sürecini tamamen öldürür
+            return True
+        return False
 
     def _find_suitable_target(self):
         """Ayarlara uygun rakibi seçer."""
@@ -88,43 +92,59 @@ class Matchmaker:
 
     def start(self):
         if not self.enabled: return
-        print(f"[Matchmaker] Sistem Aktif. (Rated: {SETTINGS['RATED_MODE']})")
+        print(f"🚀 Oxydan Matchmaker Aktif. (Max Slot: {SETTINGS['MAX_PARALLEL_GAMES']})")
 
         while True:
-            # 1. STOP Kontrolü
+            # --- 1. AKILLI STOP KONTROLÜ (Düzeltildi) ---
             if self._is_stop_triggered():
-                print(f"[Matchmaker] 🛑 {SETTINGS['STOP_FILE']} algılandı. Beklemede...")
+                active_count = len(self.active_games)
+                if active_count == 0:
+                    print(f"🏁 Maç kalmadı. {SETTINGS['STOP_FILE']} gereği sistem tamamen kapatılıyor.")
+                    os._exit(0)  # Süreci kesin olarak bitirir
+                else:
+                    print(f"⏳ STOP algılandı! Mevcut {active_count} maçın bitmesi bekleniyor... Yeni davet atılmayacak.")
+                    time.sleep(30)
+                    continue # Yeni maç arama adımını atla, döngü başına dön
+
+            # --- 2. Maç Sayısı Kontrolü ---
+            if len(self.active_games) >= SETTINGS["MAX_PARALLEL_GAMES"]:
                 time.sleep(15)
                 continue
 
-            # 2. Maç Sayısı Kontrolü
-            if len(self.active_games) >= SETTINGS["MAX_PARALLEL_GAMES"]:
-                time.sleep(20)
-                continue
-
             try:
-                # 3. Rakip Bulma
+                # --- 3. Rakip Bulma ---
                 target = self._find_suitable_target()
                 if not target:
-                    time.sleep(30)
+                    time.sleep(20)
                     continue
 
-                # 4. Süre Ayarları
-                tc = random.choice(SETTINGS["TIME_CONTROLS"])
+                # --- 4. ELO BAZLI STRATEJİ (2000 ELO Altı Düzenlemesi) ---
+                target_rating = self._get_bot_rating(target)
+                
+                if target_rating < SETTINGS["LOW_ELO_THRESHOLD"]:
+                    # 2000 Altı: Her zaman PUANSIZ ve Hızlı Tempo
+                    is_rated = False
+                    tc = random.choice(["1+0", "1+1", "2+1", "3+0", "5+0"])
+                    print(f"🎯 Düşük ELO ({target_rating}): Puansız ve Hızlı Tempo seçildi.")
+                else:
+                    # 2000 Üstü: Normal Ayarlar
+                    is_rated = SETTINGS["RATED_MODE"]
+                    tc = random.choice(SETTINGS["TIME_CONTROLS"])
+
                 t_limit, t_inc = map(int, tc.split('+'))
 
-                # 5. Meydan Okuma
-                print(f"[Matchmaker] -> {target} ({tc}) Davet ediliyor...")
+                # --- 5. Meydan Okuma ---
+                print(f"[Matchmaker] -> {target} ({tc}) Davet ediliyor... (Rated: {is_rated})")
                 self.blacklist[target] = datetime.now() + timedelta(minutes=SETTINGS["BLACKLIST_MINUTES"])
                 
                 self.client.challenges.create(
                     username=target,
-                    rated=SETTINGS["RATED_MODE"],
+                    rated=is_rated,
                     clock_limit=t_limit * 60,
                     clock_increment=t_inc
                 )
                 
-                # 6. Güvenlik Kilidi (Beton Fren)
+                # --- 6. Güvenlik Kilidi ---
                 print(f"[Matchmaker] ✅ Davet gitti. {SETTINGS['SAFETY_LOCK_TIME']}sn GÜVENLİK KİLİDİ aktif.")
                 time.sleep(SETTINGS["SAFETY_LOCK_TIME"]) 
 

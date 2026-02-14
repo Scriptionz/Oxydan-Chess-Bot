@@ -57,6 +57,21 @@ class Matchmaker:
             except: 
                 time.sleep(10)
 
+    def _get_bot_rating(self, bot_id):
+        """Botun en yüksek ratingini (Blitz, Bullet veya Rapid) döndürür."""
+        try:
+            user_data = self.client.users.get_public_data(bot_id)
+            perfs = user_data.get('perfs', {})
+            # Mevcut ratingleri topla, yoksa 0 say
+            ratings = [
+                perfs.get('blitz', {}).get('rating', 0),
+                perfs.get('bullet', {}).get('rating', 0),
+                perfs.get('rapid', {}).get('rating', 0)
+            ]
+            return max(ratings) if ratings else 0
+        except Exception:
+            return 0
+
     def _is_stop_triggered(self):
         """STOP.txt kontrolü yapar ve aktif maç yoksa sistemi tamamen kapatır."""
         if os.path.exists(SETTINGS["STOP_FILE"]):

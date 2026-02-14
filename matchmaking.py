@@ -117,85 +117,51 @@ class Matchmaker:
         start_time = time.time()
 
         while True:
+            # 1. DURDURMA KONTROLÜ
             if os.path.exists("STOP.txt"):
-                time.sleep(60)
+                time.sleep(30)
                 continue
                 
             try:
-                # --- 1. FREN: KESİN SLOT KONTROLÜ ---
+                # 2. SLOT KONTROLÜ
                 active_count = len(self.active_games)
                 if active_count >= self.max_parallel_games:
-                    time.sleep(10) 
+                    time.sleep(15) 
                     continue
 
-                # --- 2. FREN: İLK HAMLE GÜVENLİĞİ ---
-                # Eğer 1 maç varsa, 2. rakibi aramadan önce motorun ilk hamleyi 
-                # yapıp sunucuya iletmesi için 7 saniye nefes payı bırakıyoruz.
+                # 3. İLK HAMLE FRENİ (ABORT ENGELLEYİCİ)
+                # 1 maç varken 2.yi aramadan önce 10 saniye bekle ki ilk maçın hamlesi gitsin.
                 if active_count > 0:
-                    print(f"[Matchmaker] 🛡️ Mevcut maç (Slot 1/2) korunuyor, 7sn güvenlik beklemesi...")
-                    time.sleep(7) 
+                    print(f"[Matchmaker] 🛡️ Slot 1/2 dolu. 10sn güvenlik molası...")
+                    time.sleep(10) 
 
-                # Uygun rakibi bul
+                # 4. RAKİP BULMA
                 target = self._get_valid_target()
                 if not target:
-                    time.sleep(20)
+                    time.sleep(30)
                     continue
 
-                # Zaman kontrolü belirleme
-                dice = random.random()
-                elapsed = time.time() - start_time
-                if elapsed > 18000: 
-                    tc_list = ["1+0", "2+1", "3+0"]
-                else:
-                    if dice < 0.10: tc_list = ["10+0", "5+2"]
-                    else: tc_list = ["1+0", "3+0", "3+2", "5+0"]
-                
-                tc = random.choice(tc_list)
+                # 5. ZAMAN KONTROLÜ
+                tc = random.choice(["1+0", "3+0", "3+2", "5+0"])
                 t_limit, t_inc = map(int, tc.split('+'))
 
-                # Meydan oku
+                # 6. MEYDAN OKUMA VE ZORUNLU KİLİT (ANTI-SPAM)
                 try:
                     self.blacklist[target] = datetime.now() + timedelta(minutes=45)
-                    
                     self.client.challenges.create(
                         username=target,
                         rated=True,
                         clock_limit=t_limit * 60,
                         clock_increment=t_inc
                     )
-                    print(f"[Matchmaker] -> {target} ({tc}) Gönderildi. Onay bekleniyor...")
                     
-                    # --- 3. FREN: API GÜNCELLEME BEKLEMESİ ---
-                    # Meydan okuma sonrası Lichess'in listeyi güncellemesi için 5sn dur.
-                    # Bu, "aynı anda 4 maç açma" hatasını engeller.
-                    time.sleep(5) 
-                    
-                    # --- AKILLI BEKÇİ ---
-                    watch_start = time.time()
-                    game_found = False
-                    
-                    while time.time() - watch_start < 40:
-                        current_active = len(self.active_games)
-                        
-                        if current_active >= self.max_parallel_games:
-                            print(f"[Matchmaker] ✅ Slotlar dolu ({current_active}/2).")
-                            while len(self.active_games) >= self.max_parallel_games:
-                                time.sleep(15)
-                            game_found = True
-                            break
-                        
-                        elif 0 < current_active < self.max_parallel_games:
-                            print(f"[Matchmaker] ⚡ İlk maç oturdu. 2. slot için döngüye dönülüyor...")
-                            game_found = True
-                            break
-                        
-                        time.sleep(5)
-                    
-                    if not game_found:
-                        time.sleep(5)
+                    # KRİTİK: Davet gittiği an kodu 15 saniye donduruyoruz.
+                    # Bu süre, Lichess'in maçı başlatması ve listeyi güncellemesi için şarttır.
+                    print(f"[Matchmaker] -> {target} ({tc}) Gönderildi. 15sn kilit aktif...")
+                    time.sleep(15) 
 
                 except Exception as e:
-                    print(f"[Matchmaker] {target} Hatası: {e}")
+                    print(f"[Matchmaker] {target} hatası: {e}")
                     self.blacklist[target] = datetime.now() + timedelta(hours=3)
                     time.sleep(10)
 

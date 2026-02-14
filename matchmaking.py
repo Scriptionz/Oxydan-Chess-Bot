@@ -34,6 +34,7 @@ class Matchmaker:
         self.bot_pool = []
         self.blacklist = {}
         self.last_pool_update = 0
+        self.wait_timeout = 120
         self._initialize_id()
 
     def _initialize_id(self):

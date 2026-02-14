@@ -127,7 +127,12 @@ class OxydanAegisV4:
 def handle_game(client, game_id, bot, my_id):
     try:
         client.bots.post_message(game_id, "Oxydan Aegis v4: Intelligent Logic Engaged.")
-        stream = client.bots.stream_game_state(game_id)
+        try:
+            stream = client.bots.stream_game_state(game_id)
+        except Exception as e:
+            print(f"❌ Oyun streamine bağlanılamadı: {e}")
+            # Eğer buraya düşüyorsa sorun %100 Lichess yetkilendirmesidir.
+            return
         my_color = None
         board = chess.Board()
 

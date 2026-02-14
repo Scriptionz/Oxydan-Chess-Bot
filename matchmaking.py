@@ -83,16 +83,17 @@ class Matchmaker:
         except Exception:
             return False, 0
 
-    def _get_valid_target(self):
+def _get_valid_target(self):
         """Hem Elo hem de kara liste kontrolü yaparak rakip seçer."""
         self._refresh_bot_pool()
         now = datetime.now()
         
+        # Süresi dolanları temizle
         self.blacklist = {k: v for k, v in self.blacklist.items() if v > now}
         
         tried_this_cycle = 0
         for target in self.bot_pool:
-            if tried_this_cycle >= 5: break
+            if tried_this_cycle >= 10: break # Daha geniş tarama
             
             if target in self.blacklist:
                 continue
@@ -103,7 +104,8 @@ class Matchmaker:
             if is_suitable:
                 return target
             else:
-                self.blacklist[target] = now + timedelta(hours=24)
+                # Kriter dışı botları 12 saatliğine listeye ekle ki vakit kaybetmeyelim
+                self.blacklist[target] = now + timedelta(hours=12)
         
         return None
 
@@ -115,43 +117,39 @@ class Matchmaker:
         start_time = time.time()
 
         while True:
+            # STOP.txt kontrolü
             if os.path.exists("STOP.txt"):
-                print("🛑 [STOP.txt] Tespit edildi. Yeni maç aranmıyor, mevcutlar bitiriliyor...")
                 time.sleep(60)
                 continue
+                
             try:
+                # --- SLOT KONTROLÜ (PARALEL MAÇ İÇİN) ---
                 if len(self.active_games) >= self.max_parallel_games:
-                    time.sleep(30) 
+                    time.sleep(15) 
                     continue
 
-                elapsed = time.time() - start_time
-                if elapsed > 20700: 
-                    print("[Matchmaker] Kapanış saati yaklaştı, yeni maç aranmıyor.")
-                    time.sleep(600)
-                    continue
-
+                # Uygun rakibi bul
                 target = self._get_valid_target()
                 if not target:
-                    time.sleep(60)
+                    time.sleep(30)
                     continue
 
+                # Zaman kontrolü belirleme
                 dice = random.random()
+                elapsed = time.time() - start_time
                 if elapsed > 18000: 
                     tc_list = ["1+0", "2+1", "3+0"]
                 else:
-                    if dice < 0.05: tc_list = ["30+0"]
-                    elif dice < 0.20: tc_list = ["10+0", "10+2"]
-                    else: tc_list = ["1+0", "2+1", "3+0", "3+2", "5+0", "5+2"]
+                    if dice < 0.10: tc_list = ["10+0", "5+2"]
+                    else: tc_list = ["1+0", "3+0", "3+2", "5+0"]
                 
                 tc = random.choice(tc_list)
                 t_limit, t_inc = map(int, tc.split('+'))
 
-                if len(self.active_games) >= self.max_parallel_games:
-                    continue
-
-                # 5. Meydan oku
+                # Meydan oku
                 try:
-                    self.blacklist[target] = datetime.now() + timedelta(minutes=60)
+                    # Aynı bota üst üste gitmemek için kısa süreli blacklist
+                    self.blacklist[target] = datetime.now() + timedelta(minutes=45)
                     
                     self.client.challenges.create(
                         username=target,
@@ -161,41 +159,39 @@ class Matchmaker:
                     )
                     print(f"[Matchmaker] -> {target} ({tc}) Gönderildi. Slot: {len(self.active_games)}/2")
                     
-                    # --- ANTI-ABORT BEKÇİSİ (v7 GÜNCELLEMESİ) ---
-                    # Meydan okumadan sonra 60 saniye boyunca oyunun başlayıp başlamadığını izle
+                    # --- AKILLI BEKÇİ (v7 ANTI-ABORT & PARALEL) ---
                     watch_start = time.time()
-                game_started = False
-                
-                while time.time() - watch_start < 45: # 60 çok uzun, 45sn ideal
-                    if len(self.active_games) >= self.max_parallel_games:
-                        # SLOTLAR TAMAMEN DOLU (2/2)
-                        print(f"[Matchmaker] ✅ Tüm slotlar dolu ({len(self.active_games)}/2). Bekçi moduna giriliyor...")
-                        while len(self.active_games) >= self.max_parallel_games:
-                            time.sleep(15) 
-                        print(f"[Matchmaker] 🏁 Bir slot boşaldı. Tekrar aranıyor.")
-                        game_started = True
-                        break 
+                    game_found = False
                     
-                    # Eğer en az bir maç başladıysa ama hala boş slot varsa
-                    # Beklemeyi bırak ki döngü başına dönüp 2. slotu arasın
-                    elif len(self.active_games) > 0 and len(self.active_games) < self.max_parallel_games:
-                        print(f"[Matchmaker] ✅ İlk maç başladı. 2. slot aranıyor...")
-                        game_started = True
-                        break
+                    while time.time() - watch_start < 40:
+                        active_count = len(self.active_games)
                         
-                    time.sleep(5)
-                
-                # Eğer challenge gönderdik ama 45sn içinde hiç maç başlamadıysa
-                # Lichess API'yi yormamak için kısa bir dinlenme verip devam et
-                if not game_started:
-                    time.sleep(20)
+                        # DURUM A: Kapasite Doldu (2/2) -> Tam bekleme moduna gir
+                        if active_count >= self.max_parallel_games:
+                            print(f"[Matchmaker] ✅ Slotlar dolu ({active_count}/2). Maçların bitmesi bekleniyor...")
+                            while len(self.active_games) >= self.max_parallel_games:
+                                time.sleep(15)
+                            print(f"[Matchmaker] 🏁 Bir slot boşaldı. Yeni rakip aranıyor.")
+                            game_found = True
+                            break
+                        
+                        # DURUM B: En az 1 maç var ama hala yer var (1/2) -> Hemen aramaya geri dön
+                        elif 0 < active_count < self.max_parallel_games:
+                            print(f"[Matchmaker] ⚡ Maç başladı. 2. slot için aranıyor...")
+                            game_found = True
+                            break
+                        
+                        time.sleep(5)
+                    
+                    if not game_found:
+                        # Teklif kabul edilmediyse veya maç başlamadıysa kısa dinlenme
+                        time.sleep(10)
 
                 except Exception as e:
-                    if "429" in str(e): 
-                        self._handle_rate_limit(e)
-                    else:
-                        print(f"[Matchmaker] Hata: {target} için challenge gönderilemedi.")
-                        time.sleep(10)
+                    # ABORT KORUMASI: Hata veren botu (weiawaga vb.) 3 saatliğine yasakla
+                    print(f"[Matchmaker] {target} ile maç kurulamadı veya abort riski: {e}")
+                    self.blacklist[target] = datetime.now() + timedelta(hours=3)
+                    time.sleep(10)
 
             except Exception as e:
                 self._handle_rate_limit(e)

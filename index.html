@@ -77,6 +77,7 @@
         .rule-card {
             border-left: 5px solid var(--success);
             margin-bottom: 15px;
+            padding-left: 15px;
         }
 
         .tech-section {
@@ -85,6 +86,15 @@
             padding: 30px;
             border-radius: 12px;
             margin-top: 30px;
+        }
+
+        .license-section {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border);
+            font-size: 0.9em;
+            text-align: left;
+            color: var(--text-dim);
         }
 
         .feature-list {
@@ -106,18 +116,9 @@
             font-weight: bold;
         }
 
-        code {
-            background: #30363d;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-family: 'Courier New', monospace;
-            color: #ff7b72;
-        }
-
         footer {
             margin-top: 60px;
             padding: 20px;
-            border-top: 1px solid var(--border);
             font-size: 0.9em;
             color: var(--text-dim);
             text-align: center;
@@ -138,7 +139,7 @@
         <h1 class="neon-text">🌌 OXYDAN v7.0</h1>
         <div class="elo-badge">⚡ 2800+ ELO PEAK</div>
         <p style="font-size: 1.2em; margin-top: 15px;">
-            Hybrid Neural Engine Architecture | Optimized by <strong>@Emirus_A</strong>
+            Special Bot For Lichess | Optimized by <strong>Emir Karadağ</strong>
         </p>
     </header>
 
@@ -191,15 +192,20 @@
             <p>When the board reaches 6 pieces or fewer, Oxydan ceases to "calculate" and begins to "know". By probing <strong>Syzygy Tablebases</strong>, the engine finds the mathematically absolute path to victory (or draw) with zero margin for error.</p>
         </section>
 
-        <section id="disclaimer" style="margin-top: 40px; font-size: 0.85em; opacity: 0.8;">
+        <section class="license-section">
             <h2>📜 License & Attribution</h2>
-            <p>Ethereal is a UCI-compliant chess engine operating under the <strong>GPLv3</strong> license. Oxydan v7 respects and carries forward this open-source heritage. Special thanks to the <em>Computer Chess Community</em> and the authors of Ethereal, Stockfish, and Fathom for their contributions to the field.</p>
+            <p>
+                <strong>Ethereal</strong> is a UCI-compliant chess engine operating under the <strong>GPLv3</strong> license, originally developed by <strong>Andrew Grant</strong>. 
+                Oxydan v7 respects and carries forward this open-source heritage. 
+                Special thanks to the <em>Computer Chess Community</em> and the authors of Ethereal, Stockfish, and Fathom for their contributions to the field. 
+                The <strong>Cerebellum3Merge</strong> opening library used in this project is based on the groundbreaking work of <strong>Thomas Zipproth</strong>, providing a world-class theoretical foundation for our engine.
+            </p>
         </section>
 
     </div>
 
     <footer>
-        <p>Developed with passion by <strong>@Emirus_A</strong> in 2026.</p>
+        <p>Developed with passion by <strong>Emir Karadağ</strong> in 2026.</p>
         <p>Part of the Open Source Chess Community. All rights reserved.</p>
     </footer>
 </div>

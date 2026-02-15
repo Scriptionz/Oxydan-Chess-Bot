@@ -1,1 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Oxydan v7 | Chess Engine</title>
+    <style>
+        body {
+            background-color: #0d1117;
+            color: #c9d1d9;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            text-align: center;
+            padding: 50px;
+        }
+        .container {
+            max-width: 800px;
+            margin: auto;
+            border: 1px solid #30363d;
+            padding: 30px;
+            border-radius: 15px;
+            background: #161b22;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        h1 { color: #58a6ff; font-size: 2.5em; margin-bottom: 10px; }
+        .elo-badge {
+            background: linear-gradient(90deg, #ff7b72, #a5d6ff);
+            color: #0d1117;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+        .rules {
+            text-align: left;
+            margin-top: 30px;
+            line-height: 1.6;
+        }
+        .rule-card {
+            background: #21262d;
+            padding: 15px;
+            margin: 10px 0;
+            border-left: 5px solid #238636;
+            border-radius: 5px;
+        }
+        footer { margin-top: 40px; font-size: 0.8em; color: #8b949e; }
+        .neon-text { text-shadow: 0 0 10px #58a6ff; }
+    </style>
+</head>
+<body>
 
+<div class="container">
+    <h1 class="neon-text">🌌 OXYDAN v7.0</h1>
+    <p><span class="elo-badge">~2800 ELO Strength</span></p>
+    <p>Developed by <strong>@Emirus_A</strong> | Powered by <strong>Ethereal Engine</strong></p>
+
+    <div class="rules">
+        <h3>♟️ Challenge Protocols</h3>
+        <div class="rule-card">
+            <strong>🏆 Rated (2000+ ELO):</strong> Accepted up to 30+0 time control.
+        </div>
+        <div class="rule-card" style="border-left-color: #d29922;">
+            <strong>⚔️ Unrated (1500-2000 ELO):</strong> Accepted up to 5+0 time control.
+        </div>
+        <div class="rule-card" style="border-left-color: #f85149;">
+            <strong>⚠️ Low ELO:</strong> Games under 1500 ELO are subject to auto-decline.
+        </div>
+    </div>
+
+    <div class="specs">
+        <h3>⚙️ Technical Architecture</h3>
+        <p>Book: Cerebellum3Merge | Tablebases: Syzygy 6-Piece | Infrastructure: GitHub Actions</p>
+    </div>
+
+    <footer>
+        &copy; 2026 Oxydan Chess Project - Part of the Open Source Chess Community
+    </footer>
+</div>
+
+</body>
+</html>

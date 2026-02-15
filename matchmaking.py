@@ -91,6 +91,7 @@ class Matchmaker:
         for candidate in self.bot_pool[:20]: # İlk 20 botu hızlıca tara
             if candidate in self.blacklist and self.blacklist[candidate] > now:
                 continue
+            time.sleep(2)
             
             try:
                 user_data = self.client.users.get_public_data(candidate)

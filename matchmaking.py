@@ -12,14 +12,14 @@ SETTINGS = {
     "MAX_PARALLEL_GAMES": 2,     # Aynı anda kaç maç yapılsın? (GitHub için 1 önerilir)
     "MIN_RATING": 1500,          # Rakip minimum kaç elo olsun?
     "MAX_RATING": 4000,          # Rakip maksimum kaç elo olsun?
-    "SAFETY_LOCK_TIME": 45,      # Davet attıktan sonra kaç saniye dondurulsun? (Beton Fren)
+    "SAFETY_LOCK_TIME": 60,      # Davet attıktan sonra kaç saniye dondurulsun? (Beton Fren)
     "LOW_ELO_THRESHOLD": 2000,
     "STOP_FILE": "STOP.txt",     # Durdurma dosyası adı
     "TIME_CONTROLS": ["1+0", "1+1", "2+1",                  # Bullet
         "3+0", "3+2", "5+0", "5+3",            # Blitz
         "10+0", "10+5", "15+10",               # Rapid
         "30+0"], # Rastgele seçilecek süreler
-    "POOL_REFRESH_SECONDS": 900, # Bot listesi kaç saniyede bir güncellensin?
+    "POOL_REFRESH_SECONDS": 1800, # Bot listesi kaç saniyede bir güncellensin?
     "BLACKLIST_MINUTES": 5      # Reddeden veya maç yapılan botu kaç dk engelle?
 }
 # ==========================================================

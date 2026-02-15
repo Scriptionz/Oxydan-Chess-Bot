@@ -20,7 +20,7 @@ SETTINGS = {
         "10+0", "10+5", "15+10",               # Rapid
         "30+0"], # Rastgele seçilecek süreler
     "POOL_REFRESH_SECONDS": 1800, # Bot listesi kaç saniyede bir güncellensin?
-    "BLACKLIST_MINUTES": 5      # Reddeden veya maç yapılan botu kaç dk engelle?
+    "BLACKLIST_MINUTES": 30      # Reddeden veya maç yapılan botu kaç dk engelle?
 }
 # ==========================================================
 

@@ -48,7 +48,7 @@ class OxydanAegisV4:
             for i in range(pool_size):
                 eng = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=30)
                 # Kritik UCI Ayarı: Motorun kendi iç gecikme payı
-                eng.configure({"Move Overhead": 500}) 
+                eng.configure({"MoveOverhead": 500}) 
                 if uci_options:
                     for opt, val in uci_options.items():
                         try: eng.configure({opt: val})

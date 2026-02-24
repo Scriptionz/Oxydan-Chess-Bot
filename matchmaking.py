@@ -10,16 +10,16 @@ from datetime import datetime, timedelta
 SETTINGS = {
     "RATED_MODE": True,          # True: Puanlı, False: Puansız (Test için False kalmalı)
     "MAX_PARALLEL_GAMES": 2,     # Aynı anda kaç maç yapılsın? (GitHub için 1 önerilir)
-    "MIN_RATING": 1500,          # Rakip minimum kaç elo olsun?
+    "MIN_RATING": 2250,          # Rakip minimum kaç elo olsun?
     "MAX_RATING": 4000,          # Rakip maksimum kaç elo olsun?
     "SAFETY_LOCK_TIME": 60,      # Davet attıktan sonra kaç saniye dondurulsun? (Beton Fren)
-    "LOW_ELO_THRESHOLD": 2000,
+    "LOW_ELO_THRESHOLD": 2250,
     "STOP_FILE": "STOP.txt",     # Durdurma dosyası adı
     "TIME_CONTROLS": ["1+0", "1+1", "2+1",                  # Bullet
         "3+0", "3+2", "5+0", "5+3",            # Blitz
         "10+0", "10+5", "15+10",               # Rapid
         "30+0"], # Rastgele seçilecek süreler
-    "POOL_REFRESH_SECONDS": 1800, # Bot listesi kaç saniyede bir güncellensin?
+    "POOL_REFRESH_SECONDS": 900, # Bot listesi kaç saniyede bir güncellensin?
     "BLACKLIST_MINUTES": 30      # Reddeden veya maç yapılan botu kaç dk engelle?
 }
 # ==========================================================
@@ -84,75 +84,69 @@ class Matchmaker:
         return False
 
     def _find_suitable_target(self):
-        """Ayarlara uygun rakibi seçer."""
+        """Ayarlara uygun rakibi seçer ve ratingini de döner."""
         self._refresh_bot_pool()
         now = datetime.now()
 
-        for candidate in self.bot_pool[:20]: # İlk 20 botu hızlıca tara
+        for candidate in self.bot_pool[:15]: 
             if candidate in self.blacklist and self.blacklist[candidate] > now:
                 continue
-            time.sleep(2)
+            
+            time.sleep(3) # Güvenli bekleme süresi
             
             try:
                 user_data = self.client.users.get_public_data(candidate)
+                # Botun yasaklı olup olmadığını kontrol et
+                if user_data.get('tosViolation') or user_data.get('disabled'):
+                    continue
+
                 perfs = user_data.get('perfs', {})
-                # En yüksek rating hangisiyse onu baz al
-                max_r = max([perfs.get(c, {}).get('rating', 0) for c in ['blitz', 'bullet', 'rapid']] or [0])
+                ratings = [perfs.get(c, {}).get('rating', 0) for c in ['blitz', 'bullet', 'rapid']]
+                max_r = max(ratings) if ratings else 0
 
                 if SETTINGS["MIN_RATING"] <= max_r <= SETTINGS["MAX_RATING"]:
-                    return candidate
+                    # Bot zaten maçtaysa davet atma
+                    if user_data.get('playing'):
+                         continue
+                    return candidate, max_r # İkisini birden döndür
                 else:
-                    # Kriter dışı botu 12 saat engelle
-                    self.blacklist[candidate] = now + timedelta(hours=12)
-            except: 
+                    self.blacklist[candidate] = now + timedelta(hours=6)
+            except Exception as e:
+                if "429" in str(e): raise e # Rate limit ise start() yakalasın
                 continue
-        return None
+        return None, 0
 
     def start(self):
         if not self.enabled: return
-        print(f"🚀 Oxydan Matchmaker Aktif. (Max Slot: {SETTINGS['MAX_PARALLEL_GAMES']})")
+        print(f"🚀 Oxydan Matchmaker Aktif.")
 
         while True:
-            # --- 1. AKILLI STOP KONTROLÜ (Düzeltildi) ---
+            # --- 1. STOP & SLOT KONTROLÜ (Senin kodunla aynı) ---
             if self._is_stop_triggered():
-                active_count = len(self.active_games)
-                if active_count == 0:
-                    print(f"🏁 Maç kalmadı. {SETTINGS['STOP_FILE']} gereği sistem tamamen kapatılıyor.")
-                    os._exit(0)  # Süreci kesin olarak bitirir
-                else:
-                    print(f"⏳ STOP algılandı! Mevcut {active_count} maçın bitmesi bekleniyor... Yeni davet atılmayacak.")
-                    time.sleep(30)
-                    continue # Yeni maç arama adımını atla, döngü başına dön
+                if len(self.active_games) == 0: os._exit(0)
+                time.sleep(30); continue
 
-            # --- 2. Maç Sayısı Kontrolü ---
             if len(self.active_games) >= SETTINGS["MAX_PARALLEL_GAMES"]:
-                time.sleep(15)
-                continue
+                time.sleep(15); continue
 
             try:
-                # --- 3. Rakip Bulma ---
-                target = self._find_suitable_target()
+                # --- 2. RAKİP BULMA (Değiştirildi) ---
+                target, target_rating = self._find_suitable_target()
                 if not target:
-                    time.sleep(20)
-                    continue
+                    time.sleep(30); continue
 
-                # --- 4. ELO BAZLI STRATEJİ (2000 ELO Altı Düzenlemesi) ---
-                target_rating = self._get_bot_rating(target)
-                
+                # --- 3. ELO STRATEJİSİ ---
                 if target_rating < SETTINGS["LOW_ELO_THRESHOLD"]:
-                    # 2000 Altı: Her zaman PUANSIZ ve Hızlı Tempo
                     is_rated = False
-                    tc = random.choice(["1+0", "1+1", "2+1", "3+0", "5+0"])
-                    print(f"🎯 Düşük ELO ({target_rating}): Puansız ve Hızlı Tempo seçildi.")
+                    tc = random.choice(["1+0", "1+1", "3+0"])
                 else:
-                    # 2000 Üstü: Normal Ayarlar
                     is_rated = SETTINGS["RATED_MODE"]
                     tc = random.choice(SETTINGS["TIME_CONTROLS"])
 
                 t_limit, t_inc = map(int, tc.split('+'))
 
-                # --- 5. Meydan Okuma ---
-                print(f"[Matchmaker] -> {target} ({tc}) Davet ediliyor... (Rated: {is_rated})")
+                # --- 4. MEYDAN OKUMA ---
+                print(f"[Matchmaker] -> {target} ({tc}) Davet ediliyor... (Elo: {target_rating})")
                 self.blacklist[target] = datetime.now() + timedelta(minutes=SETTINGS["BLACKLIST_MINUTES"])
                 
                 self.client.challenges.create(
@@ -162,22 +156,17 @@ class Matchmaker:
                     clock_increment=t_inc
                 )
                 
-                # --- 6. Güvenlik Kilidi ---
-                print(f"[Matchmaker] ✅ Davet gitti. {SETTINGS['SAFETY_LOCK_TIME']}sn GÜVENLİK KİLİDİ aktif.")
-                time.sleep(SETTINGS["SAFETY_LOCK_TIME"]) 
+                # Başarılı her adımda timeout'u sıfırla
+                self.wait_timeout = 120 
+                print(f"[Matchmaker] ✅ Davet gitti. {SETTINGS['SAFETY_LOCK_TIME']}sn Kilit.")
+                time.sleep(SETTINGS["SAFETY_LOCK_TIME"])
 
             except Exception as e:
+                # Hata yönetimi (Senin kodun harika çalışıyor)
                 if "429" in str(e):
-                    print(f"⚠️ [Matchmaker] Lichess Rate Limit uyarısı! {self.wait_timeout} saniye boyunca tüm istekler durduruluyor...")
+                    print(f"🚨 RATE LIMIT! {self.wait_timeout}sn sessizlik...")
                     time.sleep(self.wait_timeout)
-                    
-                    # Hata devam ederse bir sonraki bekleme süresini iki katına çıkar (Maksimum 1 saat olsun)
-                    self.wait_timeout = min(self.wait_timeout * 2, 3600) 
+                    self.wait_timeout = min(self.wait_timeout * 2, 3600)
                 else:
-                    print(f"[Matchmaker] Hata: {e}")
-                    # Normal hatalarda bekleme süresini sıfırlama, ama 30 saniye bekle
+                    print(f"⚠️ Hata: {e}")
                     time.sleep(30)
-                    
-                continue
-            self.wait_timeout = 120
-

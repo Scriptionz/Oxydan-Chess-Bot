@@ -7,15 +7,15 @@ engine:
   protocol: "uci"
   uci_options:
     Threads: 1            # 2 motor için toplam 2 thread (2 çekirdekli sistemde her motora 1 saf çekirdek)
-    Hash: 256             # 2 motor x 256MB = 512MB RAM. Hafıza derinliği için ideal.
-    MoveOverhead: 3000    # Lag koruması. Uzun maçlarda (30+0) risk almamak için 2 saniye pay.
+    Hash: 512             # 2 motor x 256MB = 512MB RAM. Hafıza derinliği için ideal.
+    MoveOverhead: 300    # Lag koruması. Uzun maçlarda (30+0) risk almamak için 2 saniye pay.
     Ponder: false         # Rakip düşünürken CPU'yu yormasın, diğer motorun performansını çalmasın.
     SyzygyPath: "./syzygy"
     SyzygyProbeDepth: 1
 
 # --- SOSYAL AYARLAR ---
 chat:
-  welcome: "Hi! Oxydan v7 InDev actived. Be ready for a great game :)"
+  welcome: "Hi! Oxydan 8 actived. Be ready for a great game :)"
   goodbye: "GG! See you later."
 
 # --- SAVAŞ MODU (GELEN MEYDAN OKUMALAR) ---

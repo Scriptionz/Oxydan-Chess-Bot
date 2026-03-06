@@ -137,6 +137,11 @@ class Matchmaker:
             if SETTINGS.get("ONLY_BOT_TOURNEYS") and "bot" not in name:
                 continue
 
+            starts_at = t.get('startsAt', 0) / 1000
+            # Eğer turnuva 15 dakikadan (JOIN_UPCOMING_MINS) daha uzaksa bekle
+            if starts_at > 0 and (starts_at - time.time()) > (SETTINGS.get("JOIN_UPCOMING_MINS", 15) * 60):
+                continue
+
             # Katılma isteği gönder
             if self._join_tournament(t_id):
                 self.registered_tournaments.add(t_id)

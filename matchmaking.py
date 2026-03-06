@@ -133,6 +133,35 @@ class Matchmaker:
         if len(self.registered_tournaments) > 500: # Kayıt sayısı 500'ü geçerse
             self.registered_tournaments.clear() # Veya sadece belirli bir yaşa göre temizle
             print("🧹 [System] Turnuva kayıt hafızası temizlendi.")
+
+    def is_challenge_acceptable(self, challenge_data):
+        """
+        Gelen challenge'ı protokole göre süzgeçten geçirir.
+        """
+        try:
+            challenger = challenge_data.get('challenger', {})
+            challenger_id = challenger.get('id', '').lower()
+            rating = challenger.get('rating', 0)
+            is_rated = challenge_data.get('rated', False)
+            
+            # 1. Kara liste kontrolü
+            if challenger_id in self.blacklist:
+                return False
+
+            # 2. PROTOKOL: 1500 ELO altıysa veya puanlıysa reddet
+            # Senaryo: 1300 ELO geldi (1500 altı)
+            if rating < 1500:
+                print(f"🚫 [Reject] Düşük seviye: {challenger_id} ({rating})")
+                return False
+            
+            # Senaryo: Puanlı oyun teklif etti (RATED_MODE False ise)
+            if is_rated and not SETTINGS["RATED_MODE"]:
+                print(f"🚫 [Reject] Puanlı oyun isteği reddedildi: {challenger_id}")
+                return False
+
+            return True
+        except Exception as e:
+            return False
             
     def _refresh_bot_pool(self):
         now = time.time()

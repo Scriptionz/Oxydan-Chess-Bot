@@ -42,6 +42,7 @@ class Matchmaker:
         self.registered_tournaments = set()
         self.last_tournament_join = 0
         self.tournament_cooldown = 3600
+        self.token = token
         
         # Lichess API erişimi için token çekiliyor
         self.token = getattr(self.client.session, 'token', None)

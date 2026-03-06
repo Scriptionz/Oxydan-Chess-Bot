@@ -41,7 +41,7 @@ class Matchmaker:
         self.wait_timeout = 120
         self.registered_tournaments = set()
         self.last_tournament_join = 0
-        self.tournament_cooldown = 3600
+        self.tournament_cooldown = 600
         self.token = token
         self._initialize_id()
 

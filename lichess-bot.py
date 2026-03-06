@@ -264,11 +264,12 @@ def main():
     bot = OxydanAegisV4(SETTINGS["ENGINE_PATH"], uci_options=config.get('engine', {}).get('uci_options', {}))
     active_games = set() 
     
-    # Matchmaker başlatma
+    # lichess-bot.py içerisindeki Matchmaker başlatma kısmını bul ve şöyle düzelt:
+    
     mm = None
     if config.get("matchmaking"):
-        mm = Matchmaker(client, config, active_games)
-        # Matchmaker sınıfının içinde self.opponent_tracker = {} olduğundan emin ol!
+        # Buraya token parametresini ekliyoruz
+        mm = Matchmaker(client, config, active_games, token=SETTINGS["TOKEN"])
         threading.Thread(target=mm.start, daemon=True).start()
 
     print(f"🔥 Oxydan 9 Hazır. ID: {my_id}", flush=True)

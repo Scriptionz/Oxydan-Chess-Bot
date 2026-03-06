@@ -29,7 +29,7 @@ SETTINGS = {
     "TABLEBASE_PIECE_LIMIT": 7,
     "MIN_THINK_TIME": 0,
     
-    "GREETING": "Void 3 On The Board!",
+    "GREETING": "Oxydan 9 On The Board!",
 }
 
 # Aynı rakiple kaç maç yapılabileceği sınırı
@@ -50,7 +50,7 @@ class OxydanAegisV4:
             for i in range(pool_size):
                 eng = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=30)
                 # DÜZELTME: MoveOverhead (Bitişik yazım)
-                eng.configure({"Move Overhead": 500}) 
+                eng.configure({"MoveOverhead": 500}) 
                 if uci_options:
                     for opt, val in uci_options.items():
                         try: eng.configure({opt: val})
@@ -318,7 +318,7 @@ def main():
         mm = Matchmaker(client, config, active_games) 
         threading.Thread(target=mm.start, daemon=True).start()
 
-    print(f"🔥 Void 3 Hazır. ID: {my_id}", flush=True)
+    print(f"🔥 Oxydan 9 Hazır. ID: {my_id}", flush=True)
 
     while True:
         try:

@@ -122,36 +122,39 @@ class OxydanAegisV4:
         return max(0.03, final_time - buffer)
         
     def get_best_move(self, board, wtime, btime, winc, binc):
-        """Void & Oxydan: Stabilize Edilmiş Hamle Seçici"""
+        """Void & Oxydan: Chess960 ve Stabilite Onarımlı"""
         
-        # 1. AÇILIŞ KİTABI (Hızlı Yanıt)
-        if os.path.exists(SETTINGS["BOOK_PATH"]):
+        # --- YENİ: CHESS960 KONTROLÜ ---
+        # Standart başlangıç dizilişi değilse veya board.chess960 True ise kitabı atla.
+        is_standard_start = board.fen().split()[0] == "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
+        is_chess960 = board.chess960 or not is_standard_start
+    
+        # 1. AÇILIŞ KİTABI (Sadece standart satrançta ve başlangıç dizilişinde çalışır)
+        if not is_chess960 and os.path.exists(SETTINGS["BOOK_PATH"]):
             try:
                 with chess.polyglot.open_reader(SETTINGS["BOOK_PATH"]) as reader:
-                    # Kitaptan rastgele bir hamle seçmek daha doğal durur
                     entries = list(reader.find_all(board))
                     if entries:
                         return random.choice(entries).move
             except Exception:
-                pass # Kitap okuma hatası stabiliteyi bozmasın
+                pass 
     
-        # 2. TABLEBASE (Ağ Gecikmesi Korumalı)
-        if len(board.piece_map()) <= SETTINGS["TABLEBASE_PIECE_LIMIT"]:
+        # 2. TABLEBASE (Aynı kalabilir, ancak Chess960 desteklemez)
+        if not is_chess960 and len(board.piece_map()) <= SETTINGS["TABLEBASE_PIECE_LIMIT"]:
             try:
-                # Lichess API talebi (Yalnızca stabilite için timeout 0.2'ye çekildi)
                 fen = board.fen().replace(" ", "_")
                 r = requests.get(
                     f"https://tablebase.lichess.ovh/standard?fen={fen}", 
-                    timeout=0.2 # Gecikmeyi önlemek için daha agresif timeout
+                    timeout=0.2 
                 )
                 if r.status_code == 200:
                     data = r.json()
                     if data.get("moves"):
                         return chess.Move.from_uci(data["moves"][0]["uci"])
             except Exception:
-                pass # İnternet kesintisi veya timeout durumunda motora geç
+                pass
     
-        # 3. STOCKFISH MOTORU (Güvenli Havuz Yönetimi)
+        # 3. STOCKFISH MOTORU (Bu kısım Chess960'ı asıl oynatacak yerdir)
         engine = None
         try:
             engine = self.engine_pool.get()
@@ -160,27 +163,20 @@ class OxydanAegisV4:
             my_time = self.to_seconds(wtime if board.turn == chess.WHITE else btime)
             my_inc = self.to_seconds(winc if board.turn == chess.WHITE else binc)
             
-            # Daha önce onardığımız v4.0 Smart Time algoritması
             think_time = self.calculate_smart_time(my_time, my_inc, board)
             
-            # Motor limiti: Hem süre hem de güvenlik için çok kısa bir minimum derinlik
-            # Bu, aşırı hızlı maçlarda motorun illegal hamle üretmesini engeller.
+            # Motorun illegal hamle yapmaması için limitleri kullanıyoruz
             result = engine.play(board, chess.engine.Limit(time=think_time))
             
             if result.move:
                 return result.move
                 
         except Exception as e:
-            print(f"🚨 Motor Hatası ({board.fen()}): {e}")
-        
+            print(f"🚨 Motor Hatası: {e}")
         finally:
-            # Motorun havuza geri dönmesini garanti altına alıyoruz
             if engine:
                 self.engine_pool.put(engine)
     
-        # 4. SON ÇARE (Acil Durum Hamlesi)
-        # Eğer her şey çökerse, rastgele bir hamle yerine merkezi kontrol eden veya 
-        # ilk yasal hamleyi döndür.
         return next(iter(board.legal_moves))
             
 def handle_game(client, game_id, bot, my_id, mm):

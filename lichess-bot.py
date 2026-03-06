@@ -182,61 +182,6 @@ class OxydanAegisV4:
         # Eğer her şey çökerse, rastgele bir hamle yerine merkezi kontrol eden veya 
         # ilk yasal hamleyi döndür.
         return next(iter(board.legal_moves))
-
-    def is_challenge_acceptable(challenge, mm_instance=None):
-        if mm_instance and mm_instance.is_in_tournament_game():
-            return False, "I am currently playing a tournament game."
-        # --- YENİ VARYANT FİLTRESİ ---
-        # Sadece 'standard' ve 'chess960' varyantlarını kabul et
-        variant = challenge.get('variant', {}).get('key')
-        if variant not in ['standard', 'chess960']:
-            return False, f"Variant '{variant}' is not supported."
-        # -----------------------------
-    
-        challenger = challenge.get('challenger')
-        if not challenger: 
-            return False, "Generic challenge"
-    
-        # GÜNCELLEME: None gelirse 1500'e yuvarla
-        rating = challenger.get('rating') or 1500
-        # GÜNCELLEME: Title yoksa string metotları hata vermesin diye boş string yap
-        title = challenger.get('title', '') or ''
-        is_bot = title.upper() == 'BOT'
-        
-        rated = challenge.get('rated', False)
-        user_id = challenger['id']
-    
-        time_control = challenge.get('timeControl', {})
-        tc_type = time_control.get('type')
-    
-        if tc_type != 'clock':
-            return False, "Only standard clock games allowed"
-    
-        limit = time_control.get('limit', 0)
-        increment = time_control.get('increment', 0)
-        total_est_time = limit + (increment * 40)
-    
-        # Global değişken kontrolü
-        try:
-            if opponent_tracker.get(user_id, 0) >= MAX_GAMES_PER_OPPONENT:
-                return False, "Too many games recently"
-        except NameError:
-            pass
-    
-        # --- Protokoller ---
-        if is_bot:
-            if rating >= 2000:
-                if total_est_time <= 1800: return True, "Accepted Masters Bot"
-                return False, "Total time too long for Masters"
-            elif 1500 <= rating < 2000:
-                if rated: return False, "Challengers must play Casual"
-                if total_est_time <= 300: return True, "Accepted Casual Challenger"
-                return False, "Total time too long for Challenger"
-            return False, "Bot rating too low"
-        else:
-            if rated: return False, "Humans must play Casual"
-            if total_est_time <= 600: return True, "Accepted Casual Human"
-            return False, "Human time limit exceeded"
             
 def handle_game(client, game_id, bot, my_id):
     try:

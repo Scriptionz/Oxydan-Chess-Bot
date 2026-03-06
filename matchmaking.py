@@ -28,7 +28,7 @@ SETTINGS = {
 }
 
 class Matchmaker:
-    def __init__(self, client, config, active_games): 
+    def __init__(self, client, config, active_games, token): 
         self.client = client
         self.config = config.get("matchmaking", {})
         self.enabled = self.config.get("allow_feed", True)

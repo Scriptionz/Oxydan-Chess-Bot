@@ -35,6 +35,7 @@ class Matchmaker:
         self.my_id = None
         self.bot_pool = []
         self.blacklist = {}
+        self.opponent_tracker = {}
         self.last_pool_update = 0
         self.wait_timeout = 120
         self._initialize_id()
@@ -134,34 +135,56 @@ class Matchmaker:
             self.registered_tournaments.clear() # Veya sadece belirli bir yaşa göre temizle
             print("🧹 [System] Turnuva kayıt hafızası temizlendi.")
 
-    def is_challenge_acceptable(self, challenge_data):
-        """
-        Gelen challenge'ı protokole göre süzgeçten geçirir.
-        """
-        try:
-            challenger = challenge_data.get('challenger', {})
-            challenger_id = challenger.get('id', '').lower()
-            rating = challenger.get('rating', 0)
-            is_rated = challenge_data.get('rated', False)
-            
-            # 1. Kara liste kontrolü
-            if challenger_id in self.blacklist:
-                return False
-
-            # 2. PROTOKOL: 1500 ELO altıysa veya puanlıysa reddet
-            # Senaryo: 1300 ELO geldi (1500 altı)
-            if rating < 1500:
-                print(f"🚫 [Reject] Düşük seviye: {challenger_id} ({rating})")
-                return False
-            
-            # Senaryo: Puanlı oyun teklif etti (RATED_MODE False ise)
-            if is_rated and not SETTINGS["RATED_MODE"]:
-                print(f"🚫 [Reject] Puanlı oyun isteği reddedildi: {challenger_id}")
-                return False
-
-            return True
-        except Exception as e:
-            return False
+    def is_challenge_acceptable(self, challenge):
+        """Sınıf içi yapıya uygun, tüm protokolleri koruyan kabul edici."""
+        
+        # Turnuva kontrolü (Artık self üzerinden çalışır)
+        if self._is_in_tournament_game():
+            return False, "I am currently playing a tournament game."
+        
+        # Varyant Filtresi
+        variant = challenge.get('variant', {}).get('key')
+        if variant not in ['standard', 'chess960']:
+            return False, f"Variant '{variant}' is not supported."
+        
+        challenger = challenge.get('challenger')
+        if not challenger: 
+            return False, "Generic challenge"
+        
+        rating = challenger.get('rating') or 1500
+        title = challenger.get('title', '') or ''
+        is_bot = title.upper() == 'BOT'
+        
+        rated = challenge.get('rated', False)
+        user_id = challenger['id']
+        
+        time_control = challenge.get('timeControl', {})
+        if time_control.get('type') != 'clock':
+            return False, "Only standard clock games allowed"
+        
+        limit = time_control.get('limit', 0)
+        increment = time_control.get('increment', 0)
+        total_est_time = limit + (increment * 40)
+        
+        # Opponent Tracker kontrolü (self.opponent_tracker tanımlı olmalı)
+        # Eğer bu değişkeni __init__ içerisinde başlatmadıysan, oraya self.opponent_tracker = {} ekle.
+        if getattr(self, 'opponent_tracker', {}).get(user_id, 0) >= 3: # 3 burada MAX_GAMES_PER_OPPONENT yerine geçer
+            return False, "Too many games recently"
+        
+        # Protokoller
+        if is_bot:
+            if rating >= 2000:
+                if total_est_time <= 1800: return True, "Accepted Masters Bot"
+                return False, "Total time too long for Masters"
+            elif 1500 <= rating < 2000:
+                if rated: return False, "Challengers must play Casual"
+                if total_est_time <= 300: return True, "Accepted Casual Challenger"
+                return False, "Total time too long for Challenger"
+            return False, "Bot rating too low"
+        else:
+            if rated: return False, "Humans must play Casual"
+            if total_est_time <= 600: return True, "Accepted Casual Human"
+            return False, "Human time limit exceeded"
             
     def _refresh_bot_pool(self):
         now = time.time()

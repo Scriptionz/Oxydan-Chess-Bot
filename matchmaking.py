@@ -57,76 +57,70 @@ class Matchmaker:
             return True
         return False
 
-    def _get_bot_rating(self, bot_id):
+    def is_challenge_acceptable(self, challenge):
+        """Dışarıdan gelen davetleri kabul etme kriteri."""
         try:
+            rating = challenge.get('challenger', {}).get('rating', 0)
+            return 1500 <= rating <= 4000
+        except:
+            return False
+
+    def _get_bot_rating(self, bot_id, clock_limit):
+        """Oyun süresine göre (Bullet/Blitz/Rapid/Classical) doğru ratingi çeker."""
+        try:
+            # Süreye göre modu belirle (clock_limit saniye cinsindendir)
+            if clock_limit < 180: mode = 'bullet'
+            elif clock_limit < 480: mode = 'blitz'
+            elif clock_limit < 1500: mode = 'rapid'
+            else: mode = 'classical'
+
             user_data = self.client.users.get_public_data(bot_id)
             perfs = user_data.get('perfs', {})
-            ratings = [perfs.get(m, {}).get('rating', 0) for m in ['blitz', 'bullet', 'rapid', 'classical']]
-            return max(ratings) if ratings else 0
-        except: return 0
+            return perfs.get(mode, {}).get('rating', 0)
+        except: 
+            return 0
 
     def _is_in_tournament_game(self):
-        """Aktif bir turnuva maçında olup olmadığını kontrol eder."""
         try:
             ongoing = self.client.games.get_ongoing()
-            # ongoing liste olarak döner, herhangi bir turnuva maçı varsa True dön
             return any(game.get('tournamentId') is not None for game in ongoing)
         except: 
             return False
 
     def _manage_tournaments(self):
-        """Yaklaşan turnuvaları tarar, mola süresini kontrol eder ve uygun olanlara katılır."""
-        
-        # 1. Genel ayar kontrolü
         if not SETTINGS.get("AUTO_TOURNAMENT", True): 
             return
-
-        # 2. Mola (Cooldown) kontrolü
-        # Eğer en son turnuvaya katılmamızdan bu yana 'tournament_cooldown' kadar süre geçmediyse işlem yapma
         if (time.time() - self.last_tournament_join) < self.tournament_cooldown:
             return
 
         try:
-            tourneys = self.client.tournaments.get_all()
+            # ONARILDI: get_all yerine get_created kullanılıyor
+            tourneys = self.client.tournaments.get_created()
             for t in tourneys:
-                # Zaten işlem yapılmışsa (veya katılmışsak) atla
                 if t['id'] in self.registered_tournaments: 
                     continue
                 
-                # Sadece yaklaşan (created) turnuvaları kontrol et
                 if t.get('status') == 'created':
                     name = t.get('fullName', '').lower()
-                    
-                    # Filtre: Sadece bot turnuvaları mı?
                     if SETTINGS.get("ONLY_BOT_TOURNEYS", True) and "bot" not in name:
                         continue
                     
-                    # Zaman filtresi: Başlamasına SETTINGS["JOIN_UPCOMING_MINS"] dakikadan az kaldıysa katıl
-                    starts_at = t.get('startsAt', 0) / 1000 # ms to sec
+                    starts_at = t.get('startsAt', 0) / 1000 
                     if (starts_at - time.time()) > (SETTINGS.get("JOIN_UPCOMING_MINS", 15) * 60):
                         continue
 
-                    # Katılım işlemi
                     self.client.tournaments.join(t['id'])
-                    
-                    # Kayıt sistemini güncelle ve zaman damgasını kaydet
                     self.registered_tournaments.add(t['id'])
                     self.last_tournament_join = time.time() 
-                    
                     print(f"🏆 [Tournament] Katılındı: {t.get('fullName')}")
-                    print(f"🕒 [Tournament] {self.tournament_cooldown / 60} dakika mola başlatıldı.")
-                    
-                    # Bir turnuvaya katıldıktan sonra döngüyü kır ki aynı anda birden fazla iş yükü oluşmasın
                     break 
-                    
+                        
         except Exception as e:
-            print(f"⚠️ [Tournament] Hata oluştu: {e}")
+            print(f"⚠️ [Tournament] Hata: {e}")
 
-    # Matchmaker sınıfına ekle:
     def _cleanup_history(self):
-        """Çok eski turnuva kayıtlarını bellekten atar."""
-        if len(self.registered_tournaments) > 500: # Kayıt sayısı 500'ü geçerse
-            self.registered_tournaments.clear() # Veya sadece belirli bir yaşa göre temizle
+        if len(self.registered_tournaments) > 500:
+            self.registered_tournaments.clear()
             print("🧹 [System] Turnuva kayıt hafızası temizlendi.")
             
     def _refresh_bot_pool(self):
@@ -138,9 +132,11 @@ class Matchmaker:
                 self.bot_pool = [b.get('id') for b in online_bots if b.get('id') and b.get('id').lower() != self.my_id.lower()]
                 random.shuffle(self.bot_pool)
                 self.last_pool_update = now
-            except: time.sleep(10)
+            except: 
+                time.sleep(10)
 
-    def _find_suitable_target(self):
+    def _find_suitable_target(self, clock_limit):
+        """Hedeflenen rating aralığına uygun botu, seçilen moda göre bulur."""
         self._refresh_bot_pool()
         now = datetime.now()
         roll = random.random()
@@ -148,36 +144,32 @@ class Matchmaker:
 
         random.shuffle(self.bot_pool)
         for bot_id in self.bot_pool[:30]:
-            if bot_id in self.blacklist and self.blacklist[bot_id] > now: continue
-            rating = self._get_bot_rating(bot_id)
+            if bot_id in self.blacklist and self.blacklist[bot_id] > now: 
+                continue
+            
+            # Dinamik rating kontrolü burada yapılıyor
+            rating = self._get_bot_rating(bot_id, clock_limit)
             time.sleep(0.4) 
             if target_range[0] <= rating <= target_range[1]:
                 return bot_id, rating
         return None, 0
 
     def start(self):
-        """Botun ana çalışma döngüsü."""
         if not self.enabled: 
             return
         
         print(f"🚀 Void 3 Hybrid Manager Aktif. (Matchmaking + Tournament)")
-        
-        # Değişkeni döngü dışına tanımlayarak 'referenced before assignment' hatasını engelliyoruz
         last_cleanup_time = time.time()
 
         while True:
             try:
-                # 0. Bellek temizliği (Her 6 saatte bir kontrol et)
                 if time.time() - last_cleanup_time > 21600:
                     self._cleanup_history()
                     last_cleanup_time = time.time()
                     
-                # 1. Turnuva Yönetimi
                 self._manage_tournaments()
 
-                # 2. Güvenlik ve Durum Kontrolü
                 if self._is_in_tournament_game():
-                    print("⚔️ [Matchmaker] Turnuva maçındayım, matchmaking askıya alındı.")
                     time.sleep(60)
                     continue
 
@@ -185,24 +177,26 @@ class Matchmaker:
                     time.sleep(15)
                     continue
 
-                # 3. Klasik Matchmaking Döngüsü
                 if len(self.active_games) < SETTINGS["MAX_PARALLEL_GAMES"]:
-                    target, target_rating = self._find_suitable_target()
+                    # Önce zaman kontrolünü seçiyoruz ki ratingi buna göre sorgulayalım
+                    tc = random.choice(SETTINGS["TIME_CONTROLS"])
+                    t_limit_raw, t_inc = map(float, tc.split('+'))
+                    clock_limit_seconds = int(t_limit_raw * 60)
+
+                    target, target_rating = self._find_suitable_target(clock_limit_seconds)
                     
                     if target:
                         variant = 'chess960' if random.random() < SETTINGS["CHESS960_CHANCE"] else 'standard'
-                        tc = random.choice(SETTINGS["TIME_CONTROLS"])
-                        t_limit_raw, t_inc = map(float, tc.split('+'))
-                        is_rated = SETTINGS["RATED_MODE"] if target_rating >= 1800 else False
+                        is_rated = SETTINGS["RATED_MODE"] if target_rating >= 1500 else False
                         
-                        print(f"[Matchmaker] -> {target} ({target_rating}) davet ediliyor...")
+                        print(f"[Matchmaker] -> {target} ({target_rating}) [{tc}] davet ediliyor...")
                         self.blacklist[target] = datetime.now() + timedelta(minutes=SETTINGS["BLACKLIST_MINUTES"])
                         
                         self.client.challenges.create(
                             username=target, 
                             rated=is_rated, 
                             variant=variant,
-                            clock_limit=int(t_limit_raw * 60), 
+                            clock_limit=clock_limit_seconds, 
                             clock_increment=int(t_inc)
                         )
                         time.sleep(SETTINGS["SAFETY_LOCK_TIME"])
@@ -212,12 +206,11 @@ class Matchmaker:
                     time.sleep(10)
 
             except Exception as e:
-                # API limit veya ağ hatası durumunda çökmemesi için hata yönetimi
                 error_str = str(e)
                 if "429" in error_str:
-                    print(f"⚠️ [Matchmaker] Hız sınırı aşıldı, {self.wait_timeout}sn bekleniyor.")
+                    print(f"⚠️ [Matchmaker] Hız sınırı (429), {self.wait_timeout}sn bekleniyor.")
                     time.sleep(self.wait_timeout)
                     self.wait_timeout = min(self.wait_timeout * 2, 900)
                 else:
-                    print(f"⚠️ [Matchmaker] Kritik Hata: {error_str}")
+                    print(f"⚠️ [Matchmaker] Hata: {error_str}")
                     time.sleep(30)

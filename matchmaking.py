@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 # ⚙️ GÜNCELLENMİŞ AYARLAR
 # ==========================================================
 SETTINGS = {
-    "RATED_MODE": False,
+    "RATED_MODE": True,
     "MAX_PARALLEL_GAMES": 2,
     "SAFETY_LOCK_TIME": 45,
     "STOP_FILE": "STOP.txt",

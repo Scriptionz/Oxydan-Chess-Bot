@@ -93,7 +93,7 @@ class Matchmaker:
             return
 
         try:
-            tourneys = self.client.tournaments.get_created()
+            tourneys = self.client.tournaments.get_all_created_tournaments()
             for t in tourneys:
                 # Zaten işlem yapılmışsa (veya katılmışsak) atla
                 if t['id'] in self.registered_tournaments: 

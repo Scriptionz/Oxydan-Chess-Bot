@@ -122,61 +122,50 @@ class OxydanAegisV4:
         return max(0.03, final_time - buffer)
         
     def get_best_move(self, board, wtime, btime, winc, binc):
-        """Void & Oxydan: Chess960 ve Stabilite Onarımlı"""
-        
-        # --- YENİ: CHESS960 KONTROLÜ ---
-        # Standart başlangıç dizilişi değilse veya board.chess960 True ise kitabı atla.
-        is_standard_start = board.fen().split()[0] == "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
-        is_chess960 = board.chess960 or not is_standard_start
-    
-        # 1. AÇILIŞ KİTABI (Sadece standart satrançta ve başlangıç dizilişinde çalışır)
-        if not is_chess960 and os.path.exists(SETTINGS["BOOK_PATH"]):
+        # 1. KİTAP KULLANIMI (Sadece varyant standartsa ve yasal hamle varsa)
+        if not board.chess960 and os.path.exists(self.book_path):
             try:
-                with chess.polyglot.open_reader(SETTINGS["BOOK_PATH"]) as reader:
+                with chess.polyglot.open_reader(self.book_path) as reader:
                     entries = list(reader.find_all(board))
                     if entries:
-                        return random.choice(entries).move
-            except Exception:
-                pass 
-    
-        # 2. TABLEBASE (Aynı kalabilir, ancak Chess960 desteklemez)
-        if not is_chess960 and len(board.piece_map()) <= SETTINGS["TABLEBASE_PIECE_LIMIT"]:
+                        # Hamleleri karıştır ve ilk yasal olanı yap
+                        shuffled_entries = list(entries)
+                        random.shuffle(shuffled_entries)
+                        for entry in shuffled_entries:
+                            if entry.move in board.legal_moves:
+                                return entry.move
+            except Exception as e:
+                print(f"📖 Kitap Hatası: {e}")
+
+        # 2. TABLEBASE (Oyun sonu 7 taş ve altı)
+        if not board.chess960 and len(board.piece_map()) <= SETTINGS["TABLEBASE_PIECE_LIMIT"]:
             try:
-                fen = board.fen().replace(" ", "_")
-                r = requests.get(
-                    f"https://tablebase.lichess.ovh/standard?fen={fen}", 
-                    timeout=0.2 
-                )
+                fen = board.fen()
+                r = requests.get(f"https://tablebase.lichess.ovh/standard?fen={fen}", timeout=0.5)
                 if r.status_code == 200:
                     data = r.json()
                     if data.get("moves"):
-                        return chess.Move.from_uci(data["moves"][0]["uci"])
-            except Exception:
-                pass
-    
-        # 3. STOCKFISH MOTORU (Bu kısım Chess960'ı asıl oynatacak yerdir)
+                        best_table_move = chess.Move.from_uci(data["moves"][0]["uci"])
+                        if best_table_move in board.legal_moves:
+                            return best_table_move
+            except: pass
+
+        # 3. MOTOR (Ethereal)
         engine = None
         try:
             engine = self.engine_pool.get()
-            
-            # Süre dönüşümleri
             my_time = self.to_seconds(wtime if board.turn == chess.WHITE else btime)
             my_inc = self.to_seconds(winc if board.turn == chess.WHITE else binc)
-            
             think_time = self.calculate_smart_time(my_time, my_inc, board)
             
-            # Motorun illegal hamle yapmaması için limitleri kullanıyoruz
             result = engine.play(board, chess.engine.Limit(time=think_time))
-            
-            if result.move:
+            if result.move and result.move in board.legal_moves:
                 return result.move
-                
         except Exception as e:
             print(f"🚨 Motor Hatası: {e}")
         finally:
-            if engine:
-                self.engine_pool.put(engine)
-    
+            if engine: self.engine_pool.put(engine)
+
         return next(iter(board.legal_moves))
             
 def handle_game(client, game_id, bot, my_id, mm):

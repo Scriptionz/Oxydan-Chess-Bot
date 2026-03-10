@@ -133,7 +133,7 @@ class OxydanAegisV4:
         try:
             for _ in range(pool_size):
                 eng = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=30)
-                eng.configure({"Move Overhead": 100})
+                eng.configure({"MoveOverhead": 100})
                 if uci_options:
                     for opt, val in uci_options.items():
                         try: eng.configure({opt: val})

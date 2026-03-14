@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Oxydan 7 | 2026.02</title>
+    <title>Oxydan 9 | 2026.03</title>
     <style>
         :root {
             --bg-dark: #0d1117;
@@ -17,6 +17,8 @@
             --danger: #f85149;
         }
 
+        * { box-sizing: border-box; }
+
         body {
             background-color: var(--bg-dark);
             color: var(--text-main);
@@ -26,15 +28,9 @@
             padding: 20px;
         }
 
-        .main-wrapper {
-            max-width: 1000px;
-            margin: 40px auto;
-        }
+        .main-wrapper { max-width: 1000px; margin: 40px auto; }
 
-        header {
-            text-align: center;
-            margin-bottom: 50px;
-        }
+        header { text-align: center; margin-bottom: 50px; }
 
         .container {
             border: 1px solid var(--border);
@@ -76,8 +72,10 @@
 
         .rule-card {
             border-left: 5px solid var(--success);
-            margin-bottom: 15px;
-            padding-left: 15px;
+            margin-bottom: 12px;
+            padding: 10px 15px;
+            background: rgba(255,255,255,0.02);
+            border-radius: 0 8px 8px 0;
         }
 
         .tech-section {
@@ -103,7 +101,7 @@
         }
 
         .feature-list li {
-            margin-bottom: 15px;
+            margin-bottom: 12px;
             padding-left: 25px;
             position: relative;
         }
@@ -126,9 +124,67 @@
 
         .neon-text { text-shadow: 0 0 20px rgba(88, 166, 255, 0.4); }
 
+        .stat-grid {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            gap: 15px;
+            margin: 30px 0;
+        }
+
+        .stat-card {
+            flex: 1;
+            min-width: 160px;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        }
+
+        .stat-label {
+            margin: 0;
+            color: #8b949e;
+            font-size: 0.75em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .stat-value {
+            font-size: 1.8rem;
+            font-weight: 800;
+            margin: 5px 0;
+        }
+
+        .stat-sub {
+            font-size: 0.7rem;
+            color: #8b949e;
+        }
+
+        .tag {
+            background: rgba(88,166,255,0.1);
+            color: var(--accent-blue);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.85em;
+        }
+
+        .new-badge {
+            background: rgba(35,134,54,0.2);
+            color: #3fb950;
+            border: 1px solid #238636;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.7em;
+            vertical-align: middle;
+            margin-left: 6px;
+        }
+
         @media (max-width: 768px) {
             .grid { grid-template-columns: 1fr; }
             h1 { font-size: 2em; }
+            .container { padding: 20px; }
         }
     </style>
 </head>
@@ -136,31 +192,46 @@
 
 <div class="main-wrapper">
     <header>
-        <h1 class="neon-text">🌌 OXYDAN v7.0</h1>
-        <div class="elo-badge">⚡ 2800+ ELO PEAK</div>
+        <h1 class="neon-text">🌌 OXYDAN 9</h1>
+        <div class="elo-badge">⚡ 2800+ BULLET PEAK</div>
         <p style="font-size: 1.2em; margin-top: 15px;">
             Special Bot For Lichess | Optimized by <strong>Emir Karadağ</strong>
         </p>
     </header>
 
     <div class="container">
-        
+
+        <!-- PROJECT OVERVIEW -->
         <section id="mission">
             <h2>🎯 Project Overview</h2>
-            <p>Oxydan v7 is not just a chess bot; it is a high-performance computational experiment. Built upon the legendary <strong>Ethereal core</strong>, Oxydan utilizes state-of-the-art Alpha-Beta searching paired with <strong>Efficiently Updatable Neural Networks (NNUE)</strong>. This version (v7.0) is specifically fine-tuned for Lichess ecosystem dynamics, balancing aggressive tactical play with profound positional understanding.</p>
+            <p>Oxydan 9 is not just a chess bot — it is a high-performance computational experiment. Built upon the legendary <strong>Ethereal core</strong>, Oxydan utilizes state-of-the-art Alpha-Beta searching paired with <strong>Efficiently Updatable Neural Networks (NNUE)</strong>. This version (9.0) is specifically fine-tuned for the Lichess ecosystem, balancing aggressive tactical play with profound positional understanding.</p>
+            <p>Beyond raw strength, Oxydan 9 is designed to <strong>support chess learners</strong> — offering post-game analysis invitations and accessible play across all time controls.</p>
         </section>
 
+        <!-- PROTOCOL + ENGINE SPECS -->
         <div class="grid">
             <div class="card">
-                <h3>♟️ Challenge Protocol</h3>
-                <div class="rule-card">
-                    <strong>🏆 RATED:</strong> Masters (2000+ ELO) only. 30+0 max control.
+                <h3>♟️ Challenge Protocol <span class="new-badge">v2 - March 2026</span></h3>
+
+                <div class="rule-card" style="border-left-color: var(--success);">
+                    <strong>🏆 ELITE BOTS (2300+ ELO)</strong><br>
+                    Rated · All formats (0.5+0 → 30+0) · Standard + Chess960
+                </div>
+                <div class="rule-card" style="border-left-color: var(--accent-blue);">
+                    <strong>⚔️ MID BOTS (2000–2300 ELO)</strong><br>
+                    Rated · Max 10+0 · Standard + Chess960
                 </div>
                 <div class="rule-card" style="border-left-color: var(--warning);">
-                    <strong>⚔️ UNRATED:</strong> Challengers (1500-2000 ELO). 5+0 max.
+                    <strong>🌱 CHALLENGER BOTS (1500–2000 ELO)</strong><br>
+                    Casual · Max 10+0 · Standard + Chess960
+                </div>
+                <div class="rule-card" style="border-left-color: #8b949e;">
+                    <strong>👤 HUMANS (1500+ ELO)</strong><br>
+                    Casual · All formats (0.5+0 → 30+0) · Standard + Chess960
                 </div>
                 <div class="rule-card" style="border-left-color: var(--danger);">
-                    <strong>⚠️ RESTRICTED:</strong> Under 1500 ELO games are subject to auto-decline to preserve engine resources.
+                    <strong>⚠️ RESTRICTED</strong><br>
+                    Under 1500 ELO auto-declined to preserve engine resources.
                 </div>
             </div>
 
@@ -170,111 +241,171 @@
                     <li><strong>Engine:</strong> Ethereal (Neural Hybrid)</li>
                     <li><strong>Search:</strong> Selective Depth Alpha-Beta</li>
                     <li><strong>Evaluation:</strong> NNUE (Classical + Neural)</li>
-                    <li><strong>Tablebases:</strong> 7-Piece Syzygy Integrated</li>
+                    <li><strong>Tablebases:</strong> 7-Piece Syzygy (Lichess API)</li>
                     <li><strong>Book:</strong> Cerebellum3Merge (Master Theory)</li>
+                    <li><strong>Opening Memory:</strong> Anti-repetition tracker (last 10 games)</li>
+                    <li><strong>Infrastructure:</strong> GitHub Actions (6h cycle)</li>
+                    <li><strong>Variants:</strong> Standard + Chess960</li>
+                    <li><strong>Tournaments:</strong> Arena + Swiss auto-join</li>
                 </ul>
             </div>
         </div>
 
-        <div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 15px; margin: 30px 0;">
-    
-        <div style="flex: 1; min-width: 180px; background: #0d1117; border: 1px solid #30363d; border-top: 4px solid #238636; padding: 20px; border-radius: 12px; text-align: center; box-shadow: 0 4px 10px rgba(0,0,0,0.3);">
-            <h4 style="margin: 0; color: #8b949e; font-size: 0.75em; text-transform: uppercase; letter-spacing: 1px;">Total Victories</h4>
-            <div style="font-size: 1.8rem; font-weight: 800; color: #3fb950; margin: 5px 0;">500+</div>
-            <div style="font-size: 0.7rem; color: #8b949e;">Across all time controls</div>
+        <!-- LIVE RATINGS -->
+        <h2>📊 Live Ratings</h2>
+        <div class="stat-grid">
+            <div class="stat-card" style="border-top: 4px solid #f85149;">
+                <h4 class="stat-label">🚀 Bullet</h4>
+                <div class="stat-value" style="color: #f85149;">2650+</div>
+                <div class="stat-sub">1100+ games played</div>
+            </div>
+            <div class="stat-card" style="border-top: 4px solid #d29922;">
+                <h4 class="stat-label">⚡ Blitz</h4>
+                <div class="stat-value" style="color: #d29922;">2700+</div>
+                <div class="stat-sub">1250+ games played</div>
+            </div>
+            <div class="stat-card" style="border-top: 4px solid #3fb950;">
+                <h4 class="stat-label">🕒 Rapid</h4>
+                <div class="stat-value" style="color: #3fb950;">2850+</div>
+                <div class="stat-sub">200+ games played</div>
+            </div>
+            <div class="stat-card" style="border-top: 4px solid var(--accent-blue);">
+                <h4 class="stat-label">🏛️ Classical</h4>
+                <div class="stat-value" style="color: var(--accent-blue);">2700</div>
+                <div class="stat-sub">74 games played</div>
+            </div>
+            <div class="stat-card" style="border-top: 4px solid #bc8cff;">
+                <h4 class="stat-label">♾️ Chess960</h4>
+                <div class="stat-value" style="color: #bc8cff;">1800+</div>
+                <div class="stat-sub">19 games · Growing fast</div>
+            </div>
         </div>
-    
-        <div style="flex: 1; min-width: 180px; background: #0d1117; border: 1px solid #30363d; border-top: 4px solid #58a6ff; padding: 20px; border-radius: 12px; text-align: center; box-shadow: 0 4px 10px rgba(0,0,0,0.3);">
-            <h4 style="margin: 0; color: #8b949e; font-size: 0.75em; text-transform: uppercase; letter-spacing: 1px;">Win Rate</h4>
-            <div style="font-size: 1.8rem; font-weight: 800; color: #58a6ff; margin: 5px 0;">75%+</div>
-            <div style="font-size: 0.7rem; color: #8b949e;">Challengers/Masters</div>
-        </div>
-    
-        <div style="flex: 1; min-width: 180px; background: #0d1117; border: 1px solid #30363d; border-top: 4px solid #d29922; padding: 20px; border-radius: 12px; text-align: center; box-shadow: 0 4px 10px rgba(0,0,0,0.3);">
-            <h4 style="margin: 0; color: #8b949e; font-size: 0.75em; text-transform: uppercase; letter-spacing: 1px;">Engine Depth</h4>
-            <div style="font-size: 1.8rem; font-weight: 800; color: #d29922; margin: 5px 0;">10-70</div>
-            <div style="font-size: 0.7rem; color: #8b949e;">Selective Depth</div>
-        </div>
-    
-        <div style="flex: 1; min-width: 180px; background: #0d1117; border: 1px solid #30363d; border-top: 4px solid #f85149; padding: 20px; border-radius: 12px; text-align: center; box-shadow: 0 4px 10px rgba(0,0,0,0.3);">
-            <h4 style="margin: 0; color: #8b949e; font-size: 0.75em; text-transform: uppercase; letter-spacing: 1px;">Avg. Move Time</h4>
-            <div style="font-size: 1.8rem; font-weight: 800; color: #f85149; margin: 5px 0;">5.8s</div>
-            <div style="font-size: 0.7rem; color: #8b949e;">High-speed Calculation</div>
-        </div>
-    
-    </div>
 
+        <!-- COMPETITIVE STANDING -->
         <div style="margin-top: 30px;">
-    <h2 style="color: var(--accent-blue); border-bottom: 1px solid var(--border); padding-bottom: 10px;">📊 Competitive Standing</h2>
-    
-    <div style="display: flex; flex-wrap: wrap; gap: 15px; margin-top: 20px;">
-        
-        <div style="flex: 2; min-width: 300px; background: #0d1117; border: 1px solid var(--border); border-radius: 12px; padding: 20px;">
-            <table style="width: 100%; border-collapse: collapse; text-align: left;">
-                <thead>
-                    <tr style="color: var(--text-dim); border-bottom: 1px solid var(--border);">
-                        <th style="padding: 10px;">Category</th>
-                        <th style="padding: 10px;">Rating</th>
-                        <th style="padding: 10px;">Global Bot Rank</th>
-                    </tr>
-                </thead>
-                <tbody style="color: #f0f6fc;">
-                    <tr style="border-bottom: 1px solid #21262d;">
-                        <td style="padding: 12px;">🚀 Bullet</td>
-                        <td style="padding: 12px; font-weight: bold; color: #ff7b72;">2700+</td>
-                        <td style="padding: 12px;"><span style="background: rgba(88,166,255,0.1); color: var(--accent-blue); padding: 2px 8px; border-radius: 4px;">Top 50?</span></td>
-                    </tr>
-                    <tr style="border-bottom: 1px solid #21262d;">
-                        <td style="padding: 12px;">⚡ Blitz</td>
-                        <td style="padding: 12px; font-weight: bold; color: #d29922;">2750+</td>
-                        <td style="padding: 12px;"><span style="background: rgba(88,166,255,0.1); color: var(--accent-blue); padding: 2px 8px; border-radius: 4px;">Top 30?</span></td>
-                    </tr>
-                    <tr style="border-bottom: 1px solid #21262d;">
-                        <td style="padding: 12px;">🕒 Rapid</td>
-                        <td style="padding: 12px; font-weight: bold; color: #3fb950;">2750+</td>
-                        <td style="padding: 12px;"><span style="background: rgba(88,166,255,0.1); color: var(--accent-blue); padding: 2px 8px; border-radius: 4px;">Top 30?</span></td>
-                    </tr>
-                    <tr>
-                        <td style="padding: 12px;">🏛️ Classical</td>
-                        <td style="padding: 12px; font-weight: bold; color: var(--accent-blue);">2750+</td>
-                        <td style="padding: 12px;"><span style="background: rgba(88,166,255,0.1); color: var(--accent-blue); padding: 2px 8px; border-radius: 4px;">Top 30?</span></td>
-                    </tr>
-                </tbody>
-            </table>
+            <h2>🏅 Competitive Standing</h2>
+            <div style="display: flex; flex-wrap: wrap; gap: 15px; margin-top: 20px;">
+
+                <div style="flex: 2; min-width: 300px; background: #0d1117; border: 1px solid var(--border); border-radius: 12px; padding: 20px;">
+                    <table style="width: 100%; border-collapse: collapse; text-align: left;">
+                        <thead>
+                            <tr style="color: var(--text-dim); border-bottom: 1px solid var(--border);">
+                                <th style="padding: 10px;">Category</th>
+                                <th style="padding: 10px;">Rating</th>
+                                <th style="padding: 10px;">Trend</th>
+                                <th style="padding: 10px;">Est. Rank</th>
+                            </tr>
+                        </thead>
+                        <tbody style="color: #f0f6fc;">
+                            <tr style="border-bottom: 1px solid #21262d;">
+                                <td style="padding: 12px;">🚀 Bullet</td>
+                                <td style="padding: 12px; font-weight: bold; color: #f85149;">2931</td>
+                                <td style="padding: 12px; color: #f85149;">▼ −6</td>
+                                <td style="padding: 12px;"><span class="tag">Top 50</span></td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #21262d;">
+                                <td style="padding: 12px;">⚡ Blitz</td>
+                                <td style="padding: 12px; font-weight: bold; color: #d29922;">2889</td>
+                                <td style="padding: 12px; color: #f85149;">▼ −16</td>
+                                <td style="padding: 12px;"><span class="tag">Top 40</span></td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #21262d;">
+                                <td style="padding: 12px;">🕒 Rapid</td>
+                                <td style="padding: 12px; font-weight: bold; color: #3fb950;">2925</td>
+                                <td style="padding: 12px; color: #3fb950;">▲ +9</td>
+                                <td style="padding: 12px;"><span class="tag">Top 30</span></td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #21262d;">
+                                <td style="padding: 12px;">🏛️ Classical</td>
+                                <td style="padding: 12px; font-weight: bold; color: var(--accent-blue);">2773</td>
+                                <td style="padding: 12px; color: #3fb950;">▲ +9</td>
+                                <td style="padding: 12px;"><span class="tag">Top 50</span></td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 12px;">♾️ Chess960</td>
+                                <td style="padding: 12px; font-weight: bold; color: #bc8cff;">2021</td>
+                                <td style="padding: 12px; color: #8b949e;">— new</td>
+                                <td style="padding: 12px;"><span class="tag">Rising</span></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div style="flex: 1; min-width: 220px; background: linear-gradient(135deg, rgba(35,134,54,0.1), rgba(13,17,23,1)); border: 1px solid #238636; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
+                    <div style="font-size: 3em;">🏆</div>
+                    <h3 style="margin: 10px 0 5px 0;">Elite Performance</h3>
+                    <p style="font-size: 0.9em; color: var(--text-dim); margin: 0;">Oxydan ranks among the <strong>top 0.2% of Lichess</strong> in Bullet, Blitz and Rapid categories.</p>
+                </div>
+            </div>
         </div>
 
-        <div style="flex: 1; min-width: 250px; background: linear-gradient(135deg, rgba(35, 134, 54, 0.1), rgba(13, 17, 23, 1)); border: 1px solid #238636; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
-            <div style="font-size: 3em;">🏆</div>
-            <h3 style="margin: 10px 0 5px 0;">Elite Performance</h3>
-            <p style="font-size: 0.9em; color: var(--text-dim); margin: 0;">Oxydan ranks among the <strong>top 0.2% of Lichess</strong> in Bullet, Blitz and Rapid categories.</p>
-        </div>
-
-    </div>
-</div>
-
-        <section class="tech-section">
-            <h2>🧠 Deep Technical Analysis</h2>
-            
-            <h3>1. The Neural Network (NNUE) Implementation</h3>
-            <p>Unlike traditional engines that use human-written evaluation terms, Oxydan's v7 core employs <strong>Neural Network evaluation</strong>. This allows the engine to "see" complex positional advantages that cannot be coded manually. The network has been trained on billions of positions, resulting in a 2800+ ELO performance on standard hardware.</p>
-
-            <h3>2. Opening Theory: The Cerebellum Advantage</h3>
-            <p>Oxydan makes use of the <strong>Cerebellum3Merge</strong> opening book. This is a highly curated library where moves are weighted by winning probability (W: 255). By offloading the opening phase to a pre-compiled library, the engine saves critical CPU cycles for middle-game calculations.</p>
-
-            <h3>3. Infrastructure: Cloud-Powered Logic</h3>
-            <p>Running on <strong>GitHub Actions</strong> infrastructure, Oxydan benefits from high-speed CPU cycles and low-latency API connections. Our <strong>Matchmaker Logic</strong> is designed with <em>Exponential Backoff</em>, ensuring 100% uptime even when facing Lichess Rate Limits (HTTP 429).</p>
-
-            <h3>4. Endgame Perfection</h3>
-            <p>When the board reaches 6 pieces or fewer, Oxydan ceases to "calculate" and begins to "know". By probing <strong>Syzygy Tablebases</strong>, the engine finds the mathematically absolute path to victory (or draw) with zero margin for error.</p>
+        <!-- NEW FEATURES v2 -->
+        <section style="margin-top: 40px;">
+            <h2>🆕 New in v2 (2026)</h2>
+            <div class="grid">
+                <div class="card">
+                    <h3>🤖 Smart Game Management</h3>
+                    <ul class="feature-list">
+                        <li><strong>Auto-abort:</strong> If opponent doesn't move within 60 seconds, game is safely abandoned — no rating points lost</li>
+                        <li><strong>Chess960 fix:</strong> Correct board initialization from FEN; castling moves parsed accurately</li>
+                        <li><strong>Move overhead:</strong> Reduced from 500ms → 100ms for faster bullet response</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <h3>💬 Communication System</h3>
+                    <ul class="feature-list">
+                        <li><strong>Opening greetings:</strong> Unique messages for humans vs. bots</li>
+                        <li><strong>Game-end reactions:</strong> Win / loss / draw messages auto-sent</li>
+                        <li><strong>Losing awareness:</strong> When position drops below −300cp, a sportsmanlike message is sent</li>
+                        <li><strong>Learning invitation:</strong> Post-game analysis offer for human opponents</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <h3>♟️ Opening Intelligence</h3>
+                    <ul class="feature-list">
+                        <li><strong>Anti-repetition tracker:</strong> Remembers last 10 game openings, avoids repeating the same line</li>
+                        <li><strong>Cerebellum book:</strong> Moves shuffled for variety, always legal-move-verified</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <h3>🏆 Tournament System</h3>
+                    <ul class="feature-list">
+                        <li><strong>Arena support:</strong> Auto-joins upcoming bot Arena tournaments</li>
+                        <li><strong>Swiss support:</strong> Scans lichess-bots, computer-chess-club and engine-bots teams</li>
+                        <li><strong>Smart cooldown:</strong> 10-minute wait between tournament joins to avoid spam</li>
+                    </ul>
+                </div>
+            </div>
         </section>
 
+        <!-- DEEP TECHNICAL -->
+        <section class="tech-section">
+            <h2>🧠 Deep Technical Analysis</h2>
+
+            <h3>1. The Neural Network (NNUE) Implementation</h3>
+            <p>Unlike traditional engines that rely on hand-crafted evaluation terms, Oxydan's core employs <strong>Neural Network evaluation (NNUE)</strong>. This allows the engine to perceive complex positional advantages that cannot be manually encoded. The network has been trained on billions of positions, producing 2900+ ELO performance on standard hardware.</p>
+
+            <h3>2. Opening Theory: The Cerebellum Advantage</h3>
+            <p>Oxydan uses the <strong>Cerebellum3Merge</strong> opening book — a curated library where moves are weighted by winning probability. By offloading the opening phase to a pre-compiled library, the engine conserves CPU cycles for middle-game calculations. An <strong>anti-repetition system</strong> ensures Oxydan does not play the same opening line twice within 10 consecutive games.</p>
+
+            <h3>3. Infrastructure: Cloud-Powered Logic</h3>
+            <p>Running on <strong>GitHub Actions</strong> infrastructure with a rolling 6-hour cycle, Oxydan benefits from high-speed CPU and low-latency API connections. The system automatically stops accepting new games 15 minutes before the cycle ends, then relaunches seamlessly. <strong>Exponential backoff</strong> handles Lichess rate limits (HTTP 429) without dropping connections.</p>
+
+            <h3>4. Endgame Perfection</h3>
+            <p>When the board reaches 7 pieces or fewer, Oxydan stops calculating and starts <em>knowing</em>. By probing <strong>Syzygy Tablebases</strong> via the Lichess API, the engine finds the mathematically optimal path to victory or draw with zero margin for error.</p>
+
+            <h3>5. Time Management</h3>
+            <p>Oxydan's dynamic time algorithm adjusts per move based on game phase (opening / middlegame / endgame), board complexity (legal move count), and panic thresholds. Move overhead is kept at 100ms to prevent time losses in fast time controls, while a ±12% random variation makes the bot's timing less predictable.</p>
+        </section>
+
+        <!-- LICENSE -->
         <section class="license-section">
             <h2>📜 License & Attribution</h2>
             <p>
-                <strong>Ethereal</strong> is a UCI-compliant chess engine operating under the <strong>GPLv3</strong> license, originally developed by <strong>Andrew Grant</strong>. 
-                Oxydan v7 respects and carries forward this open-source heritage. 
-                Special thanks to the <em>Computer Chess Community</em> and the authors of Ethereal, Stockfish, and Fathom for their contributions to the field. 
-                The <strong>Cerebellum3Merge</strong> opening library used in this project is based on the groundbreaking work of <strong>Thomas Zipproth</strong>, providing a world-class theoretical foundation for our engine.
+                <strong>Ethereal</strong> is a UCI-compliant chess engine operating under the <strong>GPLv3</strong> license, originally developed by <strong>Andrew Grant</strong>.
+                Oxydan 9 respects and carries forward this open-source heritage.
+                Special thanks to the <em>Computer Chess Community</em> and the authors of Ethereal, Stockfish, and Fathom for their contributions to the field.
+                The <strong>Cerebellum3Merge</strong> opening library is based on the groundbreaking work of <strong>Thomas Zipproth</strong>, providing a world-class theoretical foundation.
             </p>
         </section>
 

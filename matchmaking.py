@@ -47,6 +47,12 @@ SETTINGS = {
     "LOSING_STREAK_LIMIT":   3,
     "RATING_DROP_THRESHOLD": 50,
     "PROTECTION_GAME_COUNT": 10,
+
+    # Kalıcı kara liste — bu botlara asla meydan okuma gönderilmez,
+    # gelen meydan okumaları da reddedilir. (hepsi küçük harf olmalı)
+    "PERMANENT_BLACKLIST": {
+        "waychess-bot",  # Botu gereksiz yere meşgul ediyor
+    },
 }
 
 # ==========================================================
@@ -68,6 +74,15 @@ def _parse_tc(tc_str):
     return int(tc_str), 0
 
 
+# Tier adı yardımcısı (TIER_NAMES dead code'u kaldırıldı, tek yerde tanımlı)
+_TIER_NAME = {
+    (2700, 4000): "Elite",
+    (2300, 2700): "High",
+    (2000, 2300): "Mid",
+    (1500, 2000): "Low",
+}
+
+
 class RatingTracker:
     """Kötü seri ve puan düşüşü takibi."""
 
@@ -84,7 +99,7 @@ class RatingTracker:
     def record_result(self, result, mode, new_rating=None):
         # Puan düşüşü kontrolü
         if new_rating and mode in self.current:
-            old  = self.current[mode]
+            old = self.current[mode]
             self.current[mode] = new_rating
             drop = old - new_rating
             if drop >= SETTINGS["RATING_DROP_THRESHOLD"]:
@@ -291,17 +306,21 @@ class Matchmaker:
         if not challenger:
             return False, "No challenger info."
 
-        user_id  = challenger.get('id', '')
-        rating   = challenger.get('rating') or 0
-        title    = (challenger.get('title') or '').upper()
-        is_bot   = title == 'BOT'
-        rated    = challenge.get('rated', False)
+        user_id = challenger.get('id', '')
+        rating  = challenger.get('rating') or 0
+        title   = (challenger.get('title') or '').upper()
+        is_bot  = title == 'BOT'
+        rated   = challenge.get('rated', False)
+
+        # DÜZELTME 1: Kalıcı blacklist kontrolü (gelen meydan okumalar için)
+        if user_id.lower() in SETTINGS["PERMANENT_BLACKLIST"]:
+            return False, f"{user_id} is permanently blacklisted."
 
         tc = challenge.get('timeControl', {})
         if tc.get('type') != 'clock':
             return False, "Only clock games allowed."
 
-        limit_sn  = tc.get('limit', 0)
+        limit_sn = tc.get('limit', 0)
 
         if self.opponent_tracker.get(user_id, 0) >= 3:
             return False, "Too many games with this opponent recently."
@@ -340,7 +359,7 @@ class Matchmaker:
 
     def _pick_tier(self):
         """
-        Koruma aktifse → Mid kilitli
+        Koruma aktifse → Mid kilitli.
         Değilse ağırlıklı rastgele:
           Low %10 | Mid %23 | High %35 | Elite %32
         """
@@ -364,6 +383,8 @@ class Matchmaker:
                 self.bot_pool = [
                     b.get('id') for b in online
                     if b.get('id') and b.get('id').lower() != (self.my_id or '').lower()
+                    # DÜZELTME 2: Bot havuzu oluşturulurken kalıcı blacklist filtrelenir
+                    and b.get('id', '').lower() not in SETTINGS["PERMANENT_BLACKLIST"]
                 ]
                 random.shuffle(self.bot_pool)
                 self.last_pool_update = now
@@ -373,21 +394,9 @@ class Matchmaker:
 
     def _find_suitable_target(self):
         self._refresh_bot_pool()
-        tier = self._pick_tier()
-        now  = datetime.now()
-
-        TIER_NAMES = {
-            id(SETTINGS["TIER_ELITE"]): "Elite",
-            id(SETTINGS["TIER_HIGH"]):  "High",
-            id(SETTINGS["TIER_MID"]):   "Mid",
-            id(SETTINGS["TIER_LOW"]):   "Low",
-        }
-        tier_name = {
-            SETTINGS["TIER_ELITE"]: "Elite",
-            SETTINGS["TIER_HIGH"]:  "High",
-            SETTINGS["TIER_MID"]:   "Mid",
-            SETTINGS["TIER_LOW"]:   "Low",
-        }.get(tier, "?")
+        tier      = self._pick_tier()
+        tier_name = _TIER_NAME.get(tier, "?")  # DÜZELTME 3: Dead code kaldırıldı, tek lookup
+        now       = datetime.now()
 
         if tier == SETTINGS["TIER_LOW"]:
             tc_pool  = SETTINGS["TC_MAX_10"]
@@ -399,7 +408,7 @@ class Matchmaker:
             tc_pool  = SETTINGS["TC_ALL"]
             is_rated = SETTINGS["RATED_MODE"]
 
-        tc_str          = random.choice(tc_pool)
+        tc_str           = random.choice(tc_pool)
         limit_sn, inc_sn = _parse_tc(tc_str)
 
         random.shuffle(self.bot_pool)

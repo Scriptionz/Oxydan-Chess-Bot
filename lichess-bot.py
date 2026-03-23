@@ -36,15 +36,15 @@ SETTINGS = {
 # ==========================================================
 MESSAGES = {
     "greeting_bot": [
-        "Hi! Oxydan 9 ready. Good luck! ♟️",
+        "Hi! Oxydan 10 ready. Good luck! ♟️",
         "Let's play! May the best engine win 🤖",
-        "Oxydan 9 on the board! Good luck! ⚡",
+        "Oxydan 10 on the board! Good luck! ⚡",
         "Hello! Bringing my A-game today 😤♟️",
     ],
     "greeting_human": [
-        "Hi! I'm Oxydan 9, a chess bot. Good luck and have fun! 🎓♟️",
-        "Welcome! I'm Oxydan 9. Let's play! After the game I'm happy to discuss any moves 🤖",
-        "Hello! Oxydan 9 here. Good luck! Feel free to ask me about chess after we're done 🎓",
+        "Hi! I'm Oxydan 10, a chess bot. Good luck and have fun! 🎓♟️",
+        "Welcome! I'm Oxydan 10. Let's play! After the game I'm happy to discuss any moves 🤖",
+        "Hello! Oxydan 10 here. Good luck! Feel free to ask me about chess after we're done 🎓",
         "Hi there! Let's play a great game. I'm always happy to help with chess questions afterwards! ♟️",
     ],
     "win": [
@@ -118,7 +118,7 @@ class OxydanAegisV4:
         try:
             for _ in range(pool_size):
                 eng = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=30)
-                eng.configure({"Move Overhead": 100})
+                eng.configure({"MoveOverhead": 100})
                 if uci_options:
                     for opt, val in uci_options.items():
                         try: eng.configure({opt: val})

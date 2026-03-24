@@ -119,7 +119,7 @@ class OxydanAegisV4:
             for _ in range(pool_size):
                 eng = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=30)
                 # DÜZELTME 1: "MoveOverhead" → "Move Overhead" (boşluklu yazım doğru)
-                eng.configure({"MoveOverhead": 100})
+                eng.configure({"MoveOverhead": 250})
                 if uci_options:
                     for opt, val in uci_options.items():
                         try: eng.configure({opt: val})
@@ -139,52 +139,56 @@ class OxydanAegisV4:
         except: return 0.0
 
     def calculate_smart_time(self, t, inc, board):
-        buffer = SETTINGS.get("LATENCY_BUFFER", 0.05)
-
-        # ── PANİK BASAMAKLARI ──────────────────────────────────────
-        # DÜZELTME 2: Granüler panik eşikleri eklendi
-        # (eski kod sadece 0.4 ve 1.0 eşiğine sahipti — bullet'ta yetersiz)
-
-        if t < 0.3:
-            return 0.001                                           # Premove hızı
-
-        if t < 0.8:
-            return t * 0.05                                        # ~%5, max ~40ms
-
+        # Buffer'ı 0.07 (70ms) yapıyoruz. Python'un işlem yükünü ve interneti karşılar.
+        buffer = SETTINGS.get("LATENCY_BUFFER", 0.07)
+        move_count = len(board.move_stack)
+        
+        # ── 1. SEVİYE: ÖLÜM KALIM MODU (2 Saniye Altı) ──
         if t < 2.0:
-            return max(0.02, (t * 0.06) + (inc * 0.95) - buffer)  # 2sn altı
-
-        if t < 3.0:
-            return max(0.03, (t * 0.08) + (inc * 1.00) - buffer)  # 3sn altı
-
-        if t < 5.0:
-            return max(0.05, (t * 0.10) + (inc * 0.90) - buffer)  # 5sn altı
-
-        if t < 10.0:
-            return max(0.08, (t * 0.12) + (inc * 0.80) - buffer)  # 10sn altı
-
-        # ── NORMAL HESAPLAMA (10sn+) ───────────────────────────────
-        move_count  = len(board.move_stack)
-        moves_to_go = 35 if move_count < 20 else (22 if move_count < 40 else 12)
-        tension     = 0.7 + (board.legal_moves.count() / 45.0)
-        base_time   = (t / moves_to_go) * tension
-        final_time  = base_time + (inc * 0.6)
-        final_time  = min(final_time, t * 0.12, 15.0)
-        final_time *= random.uniform(0.88, 1.12)
-        return max(0.03, final_time - buffer)
-
-    def get_score(self, board):
-        engine = None
-        try:
-            engine = self.engine_pool.get(timeout=1)
-            info   = engine.analyse(board, chess.engine.Limit(time=0.05))
-            score  = info.get("score")
-            if score:
-                return score.white().score(mate_score=10000)
-        except: pass
-        finally:
-            if engine: self.engine_pool.put(engine)
-        return None
+            # Premove hızında oyna, sadece artırımı (increment) koru.
+            return max(0.01, (t * 0.02) + (inc * 0.98) - buffer)
+    
+        # ── 2. SEVİYE: ULTRA HIZLI MOD (5 Saniye Altı) ──
+        elif t < 5.0:
+            # Artırımın %95'ini kullan, eldeki ana sürenin sadece %3'üne dokun.
+            # Bu modda bot yaklaşık 0.1s - 0.2s içinde hamle yapar.
+            think = (t * 0.03) + (inc * 0.95)
+            return max(0.02, think - buffer)
+    
+        # ── 3. SEVİYE: ÇOK SERİ MOD (10 Saniye Altı) ──
+        elif t < 10.0:
+            # Artırımın %90'ını kullan, ana sürenin %5'ini harca.
+            # Ortalama hamle hızı: 0.3s - 0.4s
+            think = (t * 0.05) + (inc * 0.90)
+            return max(0.04, think - buffer)
+    
+        # ── 4. SEVİYE: HIZLI MOD (30 Saniye Altı) ──
+        elif t < 30.0:
+            # Senin istediğin "30 saniyede çok hızlı oyna" kısmı.
+            # Süreyi 60 hamleye bölüyoruz (çok güvenli), artırımın %85'ini alıyoruz.
+            # Ortalama hamle hızı: 0.5s - 0.8s
+            think = (t / 60) + (inc * 0.85)
+            return max(0.05, min(think, 1.2) - buffer) # 1.2 saniyeyi asla geçme!
+    
+        # ── 5. SEVİYE: NORMAL OYUN (30 Saniye Üstü) ──
+        else:
+            # Açılışta (ilk 15 hamle) süre biriktirmek için hızlı oyna.
+            if move_count < 15:
+                divisor = 50
+            elif move_count < 40:
+                divisor = 35
+            else:
+                divisor = 25 # Oyun sonu yaklaştıkça biraz daha kaliteye odaklan
+                
+            base_time = (t / divisor)
+            final_time = base_time + (inc * 0.7)
+            
+            # 30sn+ sürede konumsal gerginliği hesaba kat (Süre varken zekice düşün)
+            tension = 0.8 + (board.legal_moves.count() / 60.0)
+            final_time *= tension
+            
+            # Tek hamlede sürenin %8'ini veya max 12 saniyeyi geçme.
+            return max(0.1, min(final_time, t * 0.08, 12.0) - buffer)
 
     def get_best_move(self, board, wtime, btime, winc, binc):
         # 1. KİTAP — standart satranç + açılış tekrar engeli

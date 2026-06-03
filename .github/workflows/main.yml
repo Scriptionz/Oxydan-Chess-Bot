@@ -46,17 +46,15 @@ jobs:
           echo "🧹 Temizlik yapılıyor..."
           make clean 2>/dev/null || true
           
+          # ÇÖZÜM: İçi boş bir dummy dosya oluştur
+          touch dummy.nnue
+          
           echo "🚀 NNUE ve AVX2 bayrakları zorlanarak derleniyor..."
-          
-          # 'EVALFILE' değişkenini boş bir değerle tetikliyoruz ki 
-          # Makefile içindeki 'ifdef EVALFILE' bloğu tetiklensin ve USE_NNUE=1 olsun.
-          # Sonra 'basic' hedefiyle derliyoruz.
-          
           make basic EVALFILE=dummy.nnue COMP=clang
           
           if [ -f Ethereal ]; then
             chmod +x Ethereal
-            echo "✅ Derleme başarılı: $(ls -lh Ethereal)"
+            echo "✅ Derleme başarılı!"
           else
             echo "❌ Derleme başarısız."
             exit 1

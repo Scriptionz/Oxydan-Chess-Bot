@@ -28,7 +28,7 @@ def run_diagnostic():
         
         # Sınıfı modülün içinden al (V11 olarak güncellendi)
         try:
-            OxydanAegisV11 = getattr(lichess_bot_module, "OxydanAegisV11")
+            OxydanAegisV11 = getattr(lichess_bot_module, "OxydanV11")
         except AttributeError:
             print("❌ ERROR: 'OxydanAegisV11' sınıfı lichess-bot.py içinde bulunamadı!")
             print("💡 İpucu: Sınıf adını V11 yapmadıysan, getattr() parametresini mevcut sınıf adınla güncelle.")
@@ -38,7 +38,7 @@ def run_diagnostic():
 
         # 4. Motor Havuzu Başlatma Testi (Düşük Hash ile)
         # UCI ayarlarını V11'in beklediği formatta gönderiyoruz
-        bot = OxydanAegisV11(exe_path, uci_options={"Hash": 16, "Threads": 1})
+        bot = OxydanV11(exe_path, uci_options={"Hash": 16, "Threads": 1})
         board = chess.Board()
         
         # 5. Hamle Üretme Testi

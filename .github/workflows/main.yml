@@ -43,13 +43,21 @@ jobs:
           sudo apt-get install -y build-essential clang
           cd src
           
-          echo "🚀 Klasör yapısı taranıyor ve tüm kaynak dosyaları derlemeye dahil ediliyor..."
+          echo "🛠️ Motorun kendi Makefile sistemi kullanılarak optimize derleme başlatılıyor..."
           
-          # $(find . -name "*.c") komutu sayesinde hem ana klasördeki hem de alt klasörlerdeki (nnue dahil) tüm C dosyaları eksiksiz derlenir.
-          clang -O3 -std=gnu11 -Wall -Wextra -DNDEBUG -flto -DUSE_NNUE=1 -march=native $(find . -name "*.c") -lpthread -lm -o Ethereal
+          # Önceki kalıntıları temizle ve sistemi hazırla
+          make clean 2>/dev/null || true
+          
+          # GitHub sunucusunun işlemci mimarisine (AVX2/SSE) en uygun ve kararlı derlemeyi tetikler
+          make native COMP=clang
+          
+          # Eğer Makefile dosyası 'Ethereal-native' gibi ek takılı bir isim ürettiyse ana isme eşitliyoruz
+          if [ ! -f Ethereal ] && ls Ethereal* 1> /dev/null 2>&1; then
+            mv Ethereal* Ethereal
+          fi
           
           chmod +x Ethereal
-          echo "✅ Motor başarıyla derlendi."
+          echo "✅ Motor başarıyla derlendi: $(ls -lh Ethereal)"
           cd ..
 
       - name: Oxydan V11 Pre-Flight Diagnostics (Gelişmiş Teşhis)

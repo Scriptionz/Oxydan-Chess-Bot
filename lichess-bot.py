@@ -107,7 +107,7 @@ class OpeningTracker:
 # ==========================================================
 # 🧠 MOTOR YÖNETİMİ
 # ==========================================================
-class OxydanAegisV4:
+class OxydanV11:
     def __init__(self, exe_path, uci_options=None):
         self.exe_path        = exe_path
         self.book_path       = SETTINGS["BOOK_PATH"]
@@ -246,9 +246,8 @@ class OxydanAegisV4:
         legal = list(board.legal_moves)
         return legal[0] if legal else None
 
-
 # ==========================================================
-# 🎮 OYUN YÖNETİMİ
+# 🎮 GAME MANAGEMENT
 # ==========================================================
 def _get_game_mode(time_control):
     if not isinstance(time_control, dict): return 'blitz'
@@ -408,7 +407,7 @@ def main():
         if "max_games" in config["matchmaking"]:
             SETTINGS["MAX_PARALLEL_GAMES"] = config["matchmaking"]["max_games"]
 
-    bot = OxydanAegisV4(
+    bot = OxydanV11(
         SETTINGS["ENGINE_PATH"],
         uci_options=config.get('engine', {}).get('uci_options', {})
     )

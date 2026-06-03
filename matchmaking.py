@@ -455,21 +455,31 @@ class Matchmaker:
         if not candidates:
             return None, 0, 0, 0, False, tier_name
 
-        # Toplu kullanıcı verisi çek (daha az API isteği)
+        # Toplu kullanıcı verisi çek — POST /api/users (berserk'te get_by_ids yok)
         try:
-            users_data = self.client.users.get_by_ids(candidates)
-            random.shuffle(list(users_data))  # Deterministik değil
-            for user in users_data:
-                bot_id = user.get('id')
-                rating = user.get('perfs', {}).get(mode, {}).get('rating', 0)
-                if tier[0] <= rating <= tier[1]:
-                    return bot_id, rating, limit_sn, inc_sn, is_rated, tier_name
+            r = requests.post(
+                "https://lichess.org/api/users",
+                headers=self._auth_headers(),
+                data=",".join(candidates),
+                timeout=10
+            )
+            if r.status_code == 200:
+                users_data = r.json()
+                random.shuffle(users_data)
+                for user in users_data:
+                    bot_id = user.get('id')
+                    rating = user.get('perfs', {}).get(mode, {}).get('rating', 0)
+                    if tier[0] <= rating <= tier[1]:
+                        return bot_id, rating, limit_sn, inc_sn, is_rated, tier_name
+            else:
+                raise Exception(f"HTTP {r.status_code}")
         except Exception as e:
-            print(f"⚠️ [Matchmaker] Toplu veri çekme başarısız: {e} — fallback moduna geçildi")
+            print(f"⚠️ [Matchmaker] Toplu çekme başarısız: {e} — tekli moda geçildi")
             for bot_id in candidates[:5]:
                 try:
                     data   = self.client.users.get_public_data(bot_id)
                     rating = data.get('perfs', {}).get(mode, {}).get('rating', 0)
+                    time.sleep(0.3)
                     if tier[0] <= rating <= tier[1]:
                         return bot_id, rating, limit_sn, inc_sn, is_rated, tier_name
                 except Exception:

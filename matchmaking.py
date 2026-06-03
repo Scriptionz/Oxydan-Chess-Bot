@@ -4,6 +4,7 @@ import itertools
 import os
 import requests
 import json
+import threading
 from datetime import datetime, timedelta
 
 # ==========================================================
@@ -14,7 +15,7 @@ SETTINGS = {
     "MAX_PARALLEL_GAMES":    2,
     "SAFETY_LOCK_TIME":      45,
     "STOP_FILE":             "STOP.txt",
-    "POOL_REFRESH_SECONDS":  900,
+    "POOL_REFRESH_SECONDS":  300,    # ✅ 15m → 5m'ye indirildi
     "BLACKLIST_MINUTES":     60,
     "CHESS960_CHANCE":       0.10,
 
@@ -22,7 +23,7 @@ SETTINGS = {
     "AUTO_TOURNAMENT":       True,
     "JOIN_UPCOMING_MINS":    15,
     "ONLY_BOT_TOURNEYS":     True,
-    "TOURNAMENT_COOLDOWN":   600,
+    "TOURNAMENT_COOLDOWN":   180,    # ✅ 10m → 3m'ye indirildi
 
     # Zaman kontrolleri (saniye)
     "TC_ALL":    ["30", "60", "60+1", "120+1", "180", "180+2",
@@ -47,6 +48,7 @@ SETTINGS = {
     "LOSING_STREAK_LIMIT":   3,
     "RATING_DROP_THRESHOLD": 50,
     "PROTECTION_GAME_COUNT": 10,
+    "MAX_GAMES_PER_OPPONENT": 3,  # ✅ YENİ: Aynı rakiple max 3 oyun
 
     # Kalıcı kara liste (Küçük harf olmalı)
     "PERMANENT_BLACKLIST": {
@@ -145,12 +147,14 @@ class Matchmaker:
         self.my_id             = None
         self.bot_pool          = []
         self.blacklist         = {}
-        self.opponent_tracker  = {}  
+        self.opponent_tracker  = {}  # ✅ Korunmuş: max 3 oyun per opponent
         self.last_pool_update  = 0
         self.wait_timeout      = 120
         self.registered_tournaments = set()
         self.last_tournament_join   = 0
+        self.last_cleanup          = 0
         self.token             = token
+        self.cleanup_lock      = threading.Lock()  # ✅ Race condition önleme
         
         # YAML Ayarlarını global SETTINGS ile birleştirir
         self._apply_config_overrides()
@@ -294,10 +298,23 @@ class Matchmaker:
                 return
 
     def _cleanup_history(self):
-        if len(self.registered_tournaments) > 500:
-            self.registered_tournaments.clear()
-        self.opponent_tracker.clear()  
-        print("🧹 [System] Turnuva ve son rakip hafızası temizlendi.")
+        """✅ DÜZELTME: Thread-safe ve 1 saatte bir çalışır"""
+        with self.cleanup_lock:
+            # Turnuva hafızasını temizle (max 500 tutma)
+            if len(self.registered_tournaments) > 500:
+                old_count = len(self.registered_tournaments)
+                # Son 250'yi tut, eski 250'yi sil
+                self.registered_tournaments = set(list(self.registered_tournaments)[-250:])
+                print(f"🧹 [Cleanup] {old_count - len(self.registered_tournaments)} eski turnuva silindi")
+            
+            # Opponent tracker'ı temizle (sıfırlama yerine partial clear)
+            removed = 0
+            for opponent_id in list(self.opponent_tracker.keys()):
+                if self.opponent_tracker[opponent_id] < 3:
+                    del self.opponent_tracker[opponent_id]
+                    removed += 1
+            
+            print(f"🧹 [Cleanup] {removed} tamamlanmış opponent silindi, {len(self.opponent_tracker)} aktif opponent kaldı")
 
     # ==========================================================
     # 📋 PROTOKOL — Gelen Meydan Okuma Kabulü
@@ -330,8 +347,9 @@ class Matchmaker:
 
         limit_sn = tc.get('limit', 0)
 
-        if self.opponent_tracker.get(user_id, 0) >= 3:
-            return False, "Too many games with this opponent recently."
+        # ✅ DÜZELTME: Max 3 oyun kontrolü
+        if self.opponent_tracker.get(user_id, 0) >= SETTINGS["MAX_GAMES_PER_OPPONENT"]:
+            return False, f"Already played {SETTINGS['MAX_GAMES_PER_OPPONENT']} games with {user_id}."
 
         # İNSAN PROFILI
         if not is_bot:
@@ -384,6 +402,7 @@ class Matchmaker:
         return SETTINGS["TIER_ELITE"]
 
     def _refresh_bot_pool(self):
+        """✅ DÜZELTME: 15 dakika → 5 dakikaya indirildi"""
         now = time.time()
         if not self.bot_pool or (now - self.last_pool_update > SETTINGS["POOL_REFRESH_SECONDS"]):
             try:
@@ -396,7 +415,7 @@ class Matchmaker:
                 ]
                 random.shuffle(self.bot_pool)
                 self.last_pool_update = now
-                print(f"[Matchmaker] Temiz bot havuzu güncellendi: {len(self.bot_pool)} bot aktif.")
+                print(f"[Matchmaker] Bot havuzu güncellendi: {len(self.bot_pool)} bot aktif.")
             except Exception as e:
                 print(f"⚠️ [Matchmaker] Bot havuzu yenilenirken hata: {e}")
                 time.sleep(10)
@@ -412,7 +431,8 @@ class Matchmaker:
             is_rated = False
         elif tier == SETTINGS["TIER_MID"]:
             tc_pool  = SETTINGS["TC_MAX_10"]
-            is_rated = SETTINGS["RATED_MODE"]
+            # ✅ DÜZELTME: Protection'da ALWAYS casual
+            is_rated = False if self.rating_tracker.is_in_protection() else SETTINGS["RATED_MODE"]
         else:
             tc_pool  = SETTINGS["TC_ALL"]
             is_rated = SETTINGS["RATED_MODE"]
@@ -437,7 +457,8 @@ class Matchmaker:
                 bot_id = user.get('id')
                 rating = user.get('perfs', {}).get(mode, {}).get('rating', 0)
                 
-                if self.opponent_tracker.get(bot_id, 0) >= 3:
+                # ✅ DÜZELTME: Max 3 oyun kontrolü
+                if self.opponent_tracker.get(bot_id, 0) >= SETTINGS["MAX_GAMES_PER_OPPONENT"]:
                     continue
 
                 if tier[0] <= rating <= tier[1]:
@@ -448,7 +469,7 @@ class Matchmaker:
                 try:
                     data = self.client.users.get_public_data(bot_id)
                     rating = data.get('perfs', {}).get(mode, {}).get('rating', 0)
-                    if tier[0] <= rating <= tier[1] and self.opponent_tracker.get(bot_id, 0) < 3:
+                    if tier[0] <= rating <= tier[1] and self.opponent_tracker.get(bot_id, 0) < SETTINGS["MAX_GAMES_PER_OPPONENT"]:
                         return bot_id, rating, limit_sn, inc_sn, is_rated, tier_name
                 except:
                     continue
@@ -458,7 +479,6 @@ class Matchmaker:
     def record_game_result(self, result, mode, new_rating=None, opponent_id=None):
         """Oyun bittiğinde ana dosyadan çağrılır."""
         self.rating_tracker.record_result(result, mode, new_rating)
-        # DÜZELTME 2: Mükerrer artırım kaldırıldı. Sayaç sadece challenge atıldığında/alındığında işlenecek.
 
 
     # ==========================================================
@@ -470,15 +490,17 @@ class Matchmaker:
             print("🚫 Matchmaker YAML konfigürasyonu ile devre dışı bırakılmış.")
             return
 
-        print("🚀 Matchmaker v3.5 Optimize Aktif — Oxydan Aegis Protokolü")
+        print("🚀 Matchmaker v3.6 Optimize Aktif — Oxydan Aegis Protokolü")
         print("   Dağılım: Elite %32 | High %35 | Mid %23 | Low %10")
-        last_cleanup = time.time()
+        print(f"   Max per opponent: {SETTINGS['MAX_GAMES_PER_OPPONENT']}")
+        self.last_cleanup = time.time()
 
         while True:
             try:
-                if time.time() - last_cleanup > 21600:
+                # ✅ DÜZELTME: 6 saat → 1 saatte bir temizle
+                if time.time() - self.last_cleanup > 3600:
                     self._cleanup_history()
-                    last_cleanup = time.time()
+                    self.last_cleanup = time.time()
 
                 self._manage_tournaments()
 
@@ -495,8 +517,9 @@ class Matchmaker:
                         mins      = limit_sn // 60
                         secs      = limit_sn % 60
                         tc_label  = f"{mins}:{secs:02d}+{inc_sn}" if secs else f"{mins}+{inc_sn}"
+                        games_played = self.opponent_tracker.get(target, 0)
 
-                        print(f"[{tier_name}] → {target} ({rating}) | {rated_str} | {tc_label} | {variant}")
+                        print(f"[{tier_name}] → {target} ({rating}) | {rated_str} | {tc_label} | {variant} | Game {games_played}/{SETTINGS['MAX_GAMES_PER_OPPONENT']}")
 
                         self.blacklist[target] = datetime.now() + timedelta(
                             minutes=SETTINGS["BLACKLIST_MINUTES"]

@@ -23,8 +23,8 @@ SETTINGS = {
 
     "MAX_PARALLEL_GAMES":         2,
     "MAX_TOTAL_RUNTIME":          21600,    # ✅ 6 saat (6*3600)
-    "MIN_GAME_SECONDS_REMAINING": 1200,    # ✅ 20 dakika kala DURDUR
-    "MAX_GAME_TIME_LIMIT":        300,     # ✅ 5+0 den uzun oyun alma
+    "MAX_GAME_TIME_LIMIT":        1800,    # ✅ 30+0'a kadar (1800 saniye) oyun kabul edebilir
+    "MIN_GAME_SECONDS_REMAINING": 300,     # ✅ Sadece 5 dakika güvenlik payı (Dinamik hesaba geçtik)
     "MIN_TIME_TO_DECLINE":        600,     # ✅ 10 dakika buffer
 
     "LATENCY_BUFFER":             0.07,    # Python yükü için optimize edildi
@@ -438,68 +438,61 @@ def main():
         mm = Matchmaker(client, config, active_games, token=SETTINGS["TOKEN"])
         threading.Thread(target=mm.start, daemon=True).start()
 
-    print(f"🔥 Oxydan 11 Hazır. ID: {my_id} | Geliştirici: Emir Karadağ", flush=True)
+    # 🛡️ GÖZCÜ (WATCHDOG) DEVREYE GİRİYOR
+    threading.Thread(target=runtime_watchdog, args=(start_time, active_games), daemon=True).start()
+
+    print(f"🔥 Oxydan 11 Hazır. ID: {my_id} | Aegis Watchdog Devrede.", flush=True)
 
     while True:
         try:
             for event in client.bots.stream_incoming_events():
-                cur_elapsed  = time.time() - start_time
-                
-                # ✅ DÜZELTME: Dinamik zaman kontrolü
+                cur_elapsed    = time.time() - start_time
                 time_remaining = SETTINGS["MAX_TOTAL_RUNTIME"] - cur_elapsed
-                should_stop    = (os.path.exists("STOP.txt") or cur_elapsed >= SETTINGS["MAX_TOTAL_RUNTIME"])
                 
-                # Yeni oyun kabul edilebilir mi? (20 dakika kala durdur + 10 dakika buffer)
-                should_accept_games = time_remaining > SETTINGS["MIN_GAME_SECONDS_REMAINING"]
-                
-                # Eğer 10 dakikaya yaklaşırsa ve oyunlar varsa bekleme moduna geç
-                should_wait_for_games = time_remaining < SETTINGS["MIN_TIME_TO_DECLINE"] and len(active_games) > 0
-
                 if event['type'] == 'challenge':
                     ch    = event['challenge']
                     ch_id = ch['id']
                     
-                    # ✅ Challenge zaman kontrolü
                     tc = ch.get('timeControl', {})
-                    time_limit = tc.get('limit', 0)  # Saniye cinsinden
+                    time_limit = tc.get('limit', 0)
+                    increment = tc.get('increment', 0)
+                    
+                    # 🧠 DİNAMİK SÜRE HESAPLAMASI:
+                    # Bir oyunun maksimum sürebileceği tahmini zaman (İki tarafın süresi + ortalama 60 hamlelik ek süre)
+                    estimated_game_duration = (time_limit * 2) + (increment * 120) 
+                    
+                    # Bu maçı alırsak oturum süremizi aşar mıyız? (+ 5 dakika/300s güvenlik payı)
+                    is_time_safe = time_remaining > (estimated_game_duration + SETTINGS["MIN_GAME_SECONDS_REMAINING"])
                     
                     accept, reason = True, 'policy'
                     if mm:
                         accept, reason = mm.is_challenge_acceptable(ch)
                     
-                    # ✅ YENI KOŞULLAR:
                     can_accept = (
-                        not should_stop and                                    # Runtime sona ermedi
-                        should_accept_games and                               # 20 dakika kala var
-                        time_limit <= SETTINGS["MAX_GAME_TIME_LIMIT"] and     # Max 5+0 oyun
-                        len(active_games) < SETTINGS["MAX_PARALLEL_GAMES"] and # Paralel slot var
-                        accept                                                 # Matchmaker onayı
+                        is_time_safe and                                       # ✅ Dinamik: Oturum süresi bu maça yetecek mi?
+                        time_limit <= SETTINGS["MAX_GAME_TIME_LIMIT"] and      # ✅ Max 30+0 kuralı (1800s)
+                        len(active_games) < SETTINGS["MAX_PARALLEL_GAMES"] and # Paralel maç slotu boş
+                        accept                                                 # Matchmaker onaylı
                     )
 
                     try:
                         if can_accept:
                             client.challenges.accept(ch_id)
-                            print(f"✅ Kabul: {ch_id} | {reason} | Kalan: {int(time_remaining)}s", flush=True)
+                            print(f"✅ Kabul: {ch_id} | {reason} | Kalan Oturum: {int(time_remaining)}s | Tahmini Maç: {int(estimated_game_duration)}s", flush=True)
                         else:
                             reason_detail = ""
-                            if should_stop:
-                                reason_detail = "Runtime bitti"
-                            elif not should_accept_games:
-                                reason_detail = f"Çok az zaman kaldı ({int(time_remaining)}s)"
+                            if not is_time_safe:
+                                reason_detail = f"Oturum süresi yetersiz. Kalan {int(time_remaining)}s, maça ({int(estimated_game_duration)}s) yetmiyor."
                             elif time_limit > SETTINGS["MAX_GAME_TIME_LIMIT"]:
                                 reason_detail = f"Oyun çok uzun ({time_limit}s > {SETTINGS['MAX_GAME_TIME_LIMIT']}s)"
                             elif len(active_games) >= SETTINGS["MAX_PARALLEL_GAMES"]:
-                                reason_detail = "Paralel slot yok"
+                                reason_detail = "Maksimum paralel maç sınırında"
                             else:
                                 reason_detail = reason
                             
-                            decline_reason = 'later'
-                            client.challenges.decline(ch_id, reason=decline_reason)
+                            client.challenges.decline(ch_id, reason='later')
                             print(f"❌ Reddedildi: {ch_id} | {reason_detail}", flush=True)
                             
-                            if should_stop and len(active_games) == 0:
-                                print(f"🏁 6 saat doldu! Kapanıyor...")
-                                os._exit(0)
                     except Exception as ce:
                         print(f"⚠️ Challenge işleme hatası: {ce}", flush=True)
 
@@ -512,16 +505,10 @@ def main():
                             args=(client, game_id, bot, my_id, active_games, mm, start_time),
                             daemon=True
                         ).start()
-                
-                # ✅ Status bildirimi
-                if time_remaining < SETTINGS["MIN_TIME_TO_DECLINE"]:
-                    if should_wait_for_games:
-                        print(f"⏳ Son 10 dakika! Kalan oyunları bekliyor: {len(active_games)} oyun", flush=True)
 
         except Exception as e:
-            print(f"⚠️ Akış koptu: {e}", flush=True)
+            print(f"⚠️ Lichess akışı koptu, yeniden bağlanılıyor: {e}", flush=True)
             time.sleep(5)
-
 
 if __name__ == "__main__":
     main()

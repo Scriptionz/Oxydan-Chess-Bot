@@ -43,18 +43,22 @@ jobs:
           sudo apt-get install -y build-essential clang
           cd src
           
-          echo "🛠️ Makefile üzerinden optimize derleme başlatılıyor..."
-          
-          # make clean ile eski hatalı kalıntıları temizle
+          echo "🧹 Temizlik yapılıyor..."
           make clean 2>/dev/null || true
           
-          # Ethereal/Oxydan motorlarının çoğu 'make' komutuna parametre ister.
-          # Genelde 'make profile-build' veya 'make native' gibi seçenekleri olur.
-          # Burada en geniş uyumluluk için 'make' diyoruz:
-          make COMP=clang ARCH=x86-64-avx2
+          echo "🚀 PGO hatalarını atlayıp direkt optimize derleme başlatılıyor..."
           
-          chmod +x Ethereal
-          echo "✅ Motor başarıyla derlendi."
+          # 'pgo' yerine doğrudan 'native' hedefliyoruz.
+          # Ayrıca USE_NNUE=1 parametresini buraya manuel ekliyoruz.
+          make native COMP=clang ARCH=x86-64-avx2 USE_NNUE=1
+          
+          # Derleme sonrası oluşan dosyanın ismini sabitleyelim
+          if [ -f Ethereal ]; then
+            echo "✅ Motor başarıyla derlendi."
+          else
+            echo "❌ Derleme başarısız, çıktı bulunamadı."
+            exit 1
+          fi
           cd ..
 
       - name: Oxydan V11 Pre-Flight Diagnostics (Gelişmiş Teşhis)

@@ -43,14 +43,18 @@ jobs:
           sudo apt-get install -y build-essential clang
           cd src
           
-          echo "🚀 Nöral ağ ve SIMD (AVX2) bayrakları aktif edilerek derleniyor..."
+          echo "🚀 Çakışmaları önlemek için temizlik yapılıyor..."
+          rm -f *.o nnue/*.o pyrrhic/*.o Ethereal
           
-          # Hem ana klasördeki dosyaları, hem pyrrhic'i, hem de hata veren nnue.c'yi dahil ediyoruz.
-          # -mpopcnt -msse4.1 -mavx2 ve -march=native bayrakları vepi8/vepi16 hatalarını tamamen engeller.
-          clang -O3 -std=gnu11 -Wall -Wextra -DNDEBUG -flto -DUSE_NNUE=1 -march=native -mpopcnt -msse4.1 -mavx2 *.c pyrrhic/tbprobe.c nnue/nnue.c -lpthread -lm -o Ethereal
+          echo "🧠 Nöral ağ köprüleri ve SIMD mimarisi bağlanarak derleniyor..."
+          
+          # 1. 'nnue/nnue.c' dosyasını komuttan KESİNLİKLE kaldırıyoruz (çünkü gömülü geliyor).
+          # 2. '-I.' ve '-Innue' ekleyerek tüm header dosyalarının birbirini doğru sırayla bulmasını sağlıyoruz.
+          # 3. Mimarinin taşları yerine oturduğu için ne vepi8 hatası kalacak ne de nnue_init eksikliği!
+          clang -O3 -std=gnu11 -Wall -Wextra -DNDEBUG -flto -DUSE_NNUE=1 -march=native -mavx2 -mpopcnt -msse4.1 -I. -Innue *.c pyrrhic/tbprobe.c -lpthread -lm -o Ethereal
           
           chmod +x Ethereal
-          echo "✅ Motor başarıyla derlendi."
+          echo "✅ Motor başarıyla derlendi: $(ls -lh Ethereal)"
           cd ..
 
       - name: Oxydan V11 Pre-Flight Diagnostics (Gelişmiş Teşhis)

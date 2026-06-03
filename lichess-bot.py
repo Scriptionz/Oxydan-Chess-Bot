@@ -17,18 +17,20 @@ from matchmaking import Matchmaker
 # ⚙️ AYARLAR (Varsayılanlar - Config.yml ile ezilebilir)
 # ==========================================================
 SETTINGS = {
-    "TOKEN":                 os.environ.get('LICHESS_TOKEN'),
-    "ENGINE_PATH":           "./src/Ethereal",
-    "BOOK_PATH":             "./book.bin",
+    "TOKEN":                      os.environ.get('LICHESS_TOKEN'),
+    "ENGINE_PATH":                "./src/Ethereal",
+    "BOOK_PATH":                  "./book.bin",
 
-    "MAX_PARALLEL_GAMES":     2,
-    "MAX_TOTAL_RUNTIME":      21300,
-    "STOP_ACCEPTING_MINS":    15,
+    "MAX_PARALLEL_GAMES":         2,
+    "MAX_TOTAL_RUNTIME":          21600,    # ✅ 6 saat (6*3600)
+    "MIN_GAME_SECONDS_REMAINING": 1200,    # ✅ 20 dakika kala DURDUR
+    "MAX_GAME_TIME_LIMIT":        300,     # ✅ 5+0 den uzun oyun alma
+    "MIN_TIME_TO_DECLINE":        600,     # ✅ 10 dakika buffer
 
-    "LATENCY_BUFFER":         0.07,  # Python yükü için optimize edildi
-    "TABLEBASE_PIECE_LIMIT":  7,
-    "ABORT_WAIT_SECONDS":      60,
-    "LOSING_SCORE_THRESHOLD": -300,
+    "LATENCY_BUFFER":             0.07,    # Python yükü için optimize edildi
+    "TABLEBASE_PIECE_LIMIT":      7,
+    "ABORT_WAIT_SECONDS":         60,
+    "LOSING_SCORE_THRESHOLD":     -300,
 }
 
 # ==========================================================
@@ -82,22 +84,25 @@ def pick_message(category):
 
 
 # ==========================================================
-# 🧠 AÇILIŞ TAKİBİ
+# 🧠 AÇILIŞ TAKİBİ (THREAD-SAFE)
 # ==========================================================
 class OpeningTracker:
     def __init__(self, memory_size=10):
         self.memory_size = memory_size
         self.recent = []
+        self.lock = threading.Lock()  # ✅ Thread-safe
 
     def record(self, opening_key):
-        if opening_key in self.recent:
-            self.recent.remove(opening_key)
-        self.recent.append(opening_key)
-        if len(self.recent) > self.memory_size:
-            self.recent.pop(0)
+        with self.lock:
+            if opening_key in self.recent:
+                self.recent.remove(opening_key)
+            self.recent.append(opening_key)
+            if len(self.recent) > self.memory_size:
+                self.recent.pop(0)
 
     def was_recent(self, opening_key):
-        return opening_key in self.recent
+        with self.lock:
+            return opening_key in self.recent
 
     def get_opening_key(self, board):
         moves = list(board.move_stack)[:5]
@@ -119,7 +124,7 @@ class OxydanV11:
             for _ in range(pool_size):
                 eng = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=30)
                 
-                config_overhead = uci_options.get("MoveOverhead", uci_options.get("Move Overhead", 100))
+                config_overhead = uci_options.get("MoveOverhead", uci_options.get("Move Overhead", 100)) if uci_options else 100
                 
                 try: eng.configure({"Move Overhead": config_overhead})
                 except:
@@ -141,7 +146,7 @@ class OxydanV11:
     def get_score(self, board):
         engine = None
         try:
-            engine = self.engine_pool.get()
+            engine = self.engine_pool.get(timeout=1)
             info = engine.analyse(board, chess.engine.Limit(depth=6, time=0.05))
             score = info.get("score")
             if score:
@@ -161,30 +166,48 @@ class OxydanV11:
         except: return 0.0
 
     def calculate_smart_time(self, t, inc, board):
+        """
+        ✅ DÜZELTME: Konum karmaşıklığına göre dinamik zaman ayırma
+        """
         buffer = SETTINGS.get("LATENCY_BUFFER", 0.07)
         move_count = len(board.move_stack)
+        legal_moves = len(list(board.legal_moves))  # ✅ Konum karmaşıklığı
         
+        # Bullet (<2 saniye)
         if t < 2.0:
             return max(0.01, (t * 0.02) + (inc * 0.98) - buffer)
+        
+        # Blitz (<5 saniye)
         elif t < 5.0:
-            think = (t * 0.03) + (inc * 0.95)
-            return max(0.02, think - buffer)
+            return max(0.02, (t * 0.05) + (inc * 0.95) - buffer)
+        
+        # Hızlı Blitz (<10 saniye)
         elif t < 10.0:
-            think = (t * 0.05) + (inc * 0.90)
-            return max(0.04, think - buffer)
+            return max(0.04, (t * 0.10) + (inc * 0.90) - buffer)
+        
+        # Orta Blitz (10-30 saniye) - ✅ HATA GİDERİLDİ
         elif t < 30.0:
-            think = (t / 60) + (inc * 0.85)
-            return max(0.05, min(think, 1.2) - buffer)
+            # Konum karmaşıklığı: az hamle = az düşün, çok hamle = çok düşün
+            complexity = max(0.5, min(legal_moves / 25.0, 2.5))
+            think = (t * 0.18) + (inc * 0.80)
+            think *= complexity
+            return max(0.05, min(think, t * 0.5) - buffer)
+        
+        # Rapid/Classical (30+ saniye) - ✅ legal_moves.count() hatası giderindi
         else:
-            if move_count < 15: divisor = 50
-            elif move_count < 40: divisor = 35
-            else: divisor = 25
-                
+            # Move sayısına göre aşama
+            if move_count < 15:     divisor = 40    # Açılış: daha az düşün
+            elif move_count < 40:   divisor = 25    # Orta oyun: normal düşün
+            else:                   divisor = 15    # Endgame: çok düşün
+            
             base_time = (t / divisor)
-            final_time = base_time + (inc * 0.7)
-            tension = 0.8 + (board.legal_moves.count() / 60.0)
-            final_time *= tension
-            return max(0.1, min(final_time, t * 0.08, 12.0) - buffer)
+            final_time = base_time + (inc * 0.6)
+            
+            # Konum karmaşıklık çarpanı (legal_moves göz önüne al)
+            complexity = min(legal_moves / 20.0, 2.0)
+            final_time *= complexity
+            
+            return max(0.15, min(final_time, t * 0.2) - buffer)
 
     def get_best_move(self, board, wtime, btime, winc, binc):
         if not board.chess960 and os.path.exists(self.book_path):
@@ -220,7 +243,7 @@ class OxydanV11:
 
         engine = None
         try:
-            engine = self.engine_pool.get()
+            engine = self.engine_pool.get(timeout=1)
             my_time = self.to_seconds(wtime if board.turn == chess.WHITE else btime)
             my_inc  = self.to_seconds(winc  if board.turn == chess.WHITE else binc)
             think   = self.calculate_smart_time(my_time, my_inc, board)
@@ -252,7 +275,7 @@ def _get_game_mode(time_control):
     else:              return 'classical'
 
 
-def handle_game(client, game_id, bot, my_id, mm):
+def handle_game(client, game_id, bot, my_id, mm, start_time):
     try:
         stream = client.bots.stream_game_state(game_id)
         board            = None
@@ -296,7 +319,6 @@ def handle_game(client, game_id, bot, my_id, mm):
                 game_start_time = time.time()
                 losing_msg_sent = False
 
-                # 🔥 DÜZELTME: client.bots.post_message yerine post_chat_message kullanıldı
                 greeting_cat = "greeting_human" if is_vs_human else "greeting_bot"
                 try: 
                     client.bots.post_chat_message(game_id, room="player", text=pick_message(greeting_cat))
@@ -340,7 +362,6 @@ def handle_game(client, game_id, bot, my_id, mm):
                 else:
                     result, msg_cat = 'draw', 'draw'
 
-                # 🔥 DÜZELTME: post_chat_message entegrasyonu
                 try:
                     client.bots.post_chat_message(game_id, room="player", text=pick_message(msg_cat))
                     if is_vs_human:
@@ -353,7 +374,6 @@ def handle_game(client, game_id, bot, my_id, mm):
                     mm.record_game_result(result, game_mode)
                 break
 
-            # 🔥 DÜZELTME: post_chat_message entegrasyonu
             if is_vs_human and not losing_msg_sent and len(board.move_stack) >= 20:
                 try:
                     score = bot.get_score(board)
@@ -382,8 +402,8 @@ def handle_game(client, game_id, bot, my_id, mm):
         print(f"🚨 Oyun Hatası ({game_id}): {e}", flush=True)
 
 
-def handle_game_wrapper(client, game_id, bot, my_id, active_games, mm):
-    try: handle_game(client, game_id, bot, my_id, mm)
+def handle_game_wrapper(client, game_id, bot, my_id, active_games, mm, start_time):
+    try: handle_game(client, game_id, bot, my_id, mm, start_time)
     finally: active_games.discard(game_id)
 
 
@@ -409,12 +429,12 @@ def main():
 
     bot = OxydanV11(
         SETTINGS["ENGINE_PATH"],
-        uci_options=config.get('engine', {}).get('uci_options', {})
+        uci_options=config.get('engine', {}).get('uci_options', {}) if config else {}
     )
     active_games = set()
 
     mm = None
-    if config.get("matchmaking"):
+    if config and config.get("matchmaking"):
         mm = Matchmaker(client, config, active_games, token=SETTINGS["TOKEN"])
         threading.Thread(target=mm.start, daemon=True).start()
 
@@ -424,34 +444,64 @@ def main():
         try:
             for event in client.bots.stream_incoming_events():
                 cur_elapsed  = time.time() - start_time
-                should_stop  = (os.path.exists("STOP.txt") or cur_elapsed > SETTINGS["MAX_TOTAL_RUNTIME"])
-                close_to_end = cur_elapsed > (SETTINGS["MAX_TOTAL_RUNTIME"] - (SETTINGS["STOP_ACCEPTING_MINS"] * 60))
+                
+                # ✅ DÜZELTME: Dinamik zaman kontrolü
+                time_remaining = SETTINGS["MAX_TOTAL_RUNTIME"] - cur_elapsed
+                should_stop    = (os.path.exists("STOP.txt") or cur_elapsed >= SETTINGS["MAX_TOTAL_RUNTIME"])
+                
+                # Yeni oyun kabul edilebilir mi? (20 dakika kala durdur + 10 dakika buffer)
+                should_accept_games = time_remaining > SETTINGS["MIN_GAME_SECONDS_REMAINING"]
+                
+                # Eğer 10 dakikaya yaklaşırsa ve oyunlar varsa bekleme moduna geç
+                should_wait_for_games = time_remaining < SETTINGS["MIN_TIME_TO_DECLINE"] and len(active_games) > 0
 
                 if event['type'] == 'challenge':
                     ch    = event['challenge']
                     ch_id = ch['id']
-
+                    
+                    # ✅ Challenge zaman kontrolü
+                    tc = ch.get('timeControl', {})
+                    time_limit = tc.get('limit', 0)  # Saniye cinsinden
+                    
                     accept, reason = True, 'policy'
                     if mm:
                         accept, reason = mm.is_challenge_acceptable(ch)
-
+                    
+                    # ✅ YENI KOŞULLAR:
                     can_accept = (
-                        not should_stop and not close_to_end and
-                        len(active_games) < SETTINGS["MAX_PARALLEL_GAMES"] and accept
+                        not should_stop and                                    # Runtime sona ermedi
+                        should_accept_games and                               # 20 dakika kala var
+                        time_limit <= SETTINGS["MAX_GAME_TIME_LIMIT"] and     # Max 5+0 oyun
+                        len(active_games) < SETTINGS["MAX_PARALLEL_GAMES"] and # Paralel slot var
+                        accept                                                 # Matchmaker onayı
                     )
 
-                    # 🔥 DÜZELTME: Meydan okuma kabul/ret adımları yerel try-except bloğuna alındı
                     try:
                         if can_accept:
                             client.challenges.accept(ch_id)
-                            print(f"✅ Kabul: {ch_id} — {reason}", flush=True)
+                            print(f"✅ Kabul: {ch_id} | {reason} | Kalan: {int(time_remaining)}s", flush=True)
                         else:
-                            decline_reason = 'later' if (should_stop or close_to_end) else 'generic'
+                            reason_detail = ""
+                            if should_stop:
+                                reason_detail = "Runtime bitti"
+                            elif not should_accept_games:
+                                reason_detail = f"Çok az zaman kaldı ({int(time_remaining)}s)"
+                            elif time_limit > SETTINGS["MAX_GAME_TIME_LIMIT"]:
+                                reason_detail = f"Oyun çok uzun ({time_limit}s > {SETTINGS['MAX_GAME_TIME_LIMIT']}s)"
+                            elif len(active_games) >= SETTINGS["MAX_PARALLEL_GAMES"]:
+                                reason_detail = "Paralel slot yok"
+                            else:
+                                reason_detail = reason
+                            
+                            decline_reason = 'later'
                             client.challenges.decline(ch_id, reason=decline_reason)
-                            print(f"❌ Reddedildi: {ch_id} — {reason}", flush=True)
-                            if should_stop and len(active_games) == 0: os._exit(0)
+                            print(f"❌ Reddedildi: {ch_id} | {reason_detail}", flush=True)
+                            
+                            if should_stop and len(active_games) == 0:
+                                print(f"🏁 6 saat doldu! Kapanıyor...")
+                                os._exit(0)
                     except Exception as ce:
-                        print(f"⚠️ Meydan okuma işlenirken hata (Muhtemelen karşı taraf iptal etti): {ce}", flush=True)
+                        print(f"⚠️ Challenge işleme hatası: {ce}", flush=True)
 
                 elif event['type'] == 'gameStart':
                     game_id = event['game']['id']
@@ -459,9 +509,14 @@ def main():
                         active_games.add(game_id)
                         threading.Thread(
                             target=handle_game_wrapper,
-                            args=(client, game_id, bot, my_id, active_games, mm),
+                            args=(client, game_id, bot, my_id, active_games, mm, start_time),
                             daemon=True
                         ).start()
+                
+                # ✅ Status bildirimi
+                if time_remaining < SETTINGS["MIN_TIME_TO_DECLINE"]:
+                    if should_wait_for_games:
+                        print(f"⏳ Son 10 dakika! Kalan oyunları bekliyor: {len(active_games)} oyun", flush=True)
 
         except Exception as e:
             print(f"⚠️ Akış koptu: {e}", flush=True)

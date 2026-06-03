@@ -43,21 +43,20 @@ jobs:
           sudo apt-get install -y build-essential clang
           cd src
           
-          echo "🧹 Dosyalar temizleniyor..."
-          rm -f *.o Ethereal
+          echo "🧹 Temizlik yapılıyor..."
+          make clean 2>/dev/null || true
           
-          echo "🚀 Makefile'a güvenmeden, doğrudan Clang ile derleniyor..."
+          echo "🚀 NNUE ve AVX2 bayrakları zorlanarak derleniyor..."
           
-          # 1. '-DUSE_NNUE=1' ile nöral ağı aktif ettik.
-          # 2. '-mavx2 -mpopcnt' ile AVX2 hatalarını gömdük.
-          # 3. Tüm .c dosyalarını ve nnue klasörünü tek seferde derliyoruz.
-          # 4. 'make' komutuna ihtiyaç duymadan, doğrudan clang ile build alıyoruz.
+          # 'EVALFILE' değişkenini boş bir değerle tetikliyoruz ki 
+          # Makefile içindeki 'ifdef EVALFILE' bloğu tetiklensin ve USE_NNUE=1 olsun.
+          # Sonra 'basic' hedefiyle derliyoruz.
           
-          clang -O3 -std=gnu11 -Wall -Wextra -DNDEBUG -flto -DUSE_NNUE=1 -march=native -mavx2 -mpopcnt -msse4.1 -I. -Innue *.c pyrrhic/tbprobe.c nnue/*.c -lpthread -lm -o Ethereal
+          make basic EVALFILE=dummy.nnue COMP=clang
           
           if [ -f Ethereal ]; then
             chmod +x Ethereal
-            echo "✅ Motor başarıyla derlendi: $(ls -lh Ethereal)"
+            echo "✅ Derleme başarılı: $(ls -lh Ethereal)"
           else
             echo "❌ Derleme başarısız."
             exit 1

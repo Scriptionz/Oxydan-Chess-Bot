@@ -27,7 +27,7 @@ SETTINGS = {
 
     "LATENCY_BUFFER":         0.07,  # Python yükü için optimize edildi
     "TABLEBASE_PIECE_LIMIT":  7,
-    "ABORT_WAIT_SECONDS":     60,
+    "ABORT_WAIT_SECONDS":      60,
     "LOSING_SCORE_THRESHOLD": -300,
 }
 
@@ -119,8 +119,6 @@ class OxydanV11:
             for _ in range(pool_size):
                 eng = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=30)
                 
-                # 🔥 BAĞLANTI DÜZELTMESİ: config.yml'deki MoveOverhead değerini dinamik okur.
-                # Bazı motorlar "MoveOverhead", bazıları "Move Overhead" bekler; ikisini de destekliyoruz.
                 config_overhead = uci_options.get("MoveOverhead", uci_options.get("Move Overhead", 100))
                 
                 try: eng.configure({"Move Overhead": config_overhead})
@@ -128,7 +126,6 @@ class OxydanV11:
                     try: eng.configure({"MoveOverhead": config_overhead})
                     except: pass
                 
-                # Diğer tüm UCI ayarlarını config'den motora enjekte et
                 if uci_options:
                     for opt, val in uci_options.items():
                         if opt in ["MoveOverhead", "Move Overhead"]: continue
@@ -141,16 +138,13 @@ class OxydanV11:
             print(f"KRİTİK HATA: {e}", flush=True)
             sys.exit(1)
 
-    # 🔥 KRİTİK DÜZELTME: Kodda handle_game içinde çağrılan ama sınıf içinde tanımlanmamış olan get_score eklendi!
     def get_score(self, board):
-        """Kaybetme farkındalık mesajları için motor havuzundan anlık hızlı analiz alır."""
         engine = None
         try:
             engine = self.engine_pool.get()
             info = engine.analyse(board, chess.engine.Limit(depth=6, time=0.05))
             score = info.get("score")
             if score:
-                # Skoru her zaman Beyaz perspektifinden döndürür
                 return score.white().score(mate_score=10000)
         except Exception as e:
             print(f"⚠️ Skor analizi hatası: {e}")
@@ -302,9 +296,12 @@ def handle_game(client, game_id, bot, my_id, mm):
                 game_start_time = time.time()
                 losing_msg_sent = False
 
+                # 🔥 DÜZELTME: client.bots.post_message yerine post_chat_message kullanıldı
                 greeting_cat = "greeting_human" if is_vs_human else "greeting_bot"
-                try: client.bots.post_message(game_id, pick_message(greeting_cat))
-                except: pass
+                try: 
+                    client.bots.post_chat_message(game_id, room="player", text=pick_message(greeting_cat))
+                except Exception as e: 
+                    print(f"⚠️ Karşılama mesajı gönderilemedi: {e}")
 
                 curr_state = state['state']
 
@@ -343,26 +340,30 @@ def handle_game(client, game_id, bot, my_id, mm):
                 else:
                     result, msg_cat = 'draw', 'draw'
 
+                # 🔥 DÜZELTME: post_chat_message entegrasyonu
                 try:
-                    client.bots.post_message(game_id, pick_message(msg_cat))
+                    client.bots.post_chat_message(game_id, room="player", text=pick_message(msg_cat))
                     if is_vs_human:
                         time.sleep(1)
-                        client.bots.post_message(game_id, pick_message("human_postgame"))
-                except: pass
+                        client.bots.post_chat_message(game_id, room="player", text=pick_message("human_postgame"))
+                except Exception as e: 
+                    print(f"⚠️ Oyun sonu mesajı gönderilemedi: {e}")
 
                 if mm and status != 'aborted':
                     mm.record_game_result(result, game_mode)
                 break
 
+            # 🔥 DÜZELTME: post_chat_message entegrasyonu
             if is_vs_human and not losing_msg_sent and len(board.move_stack) >= 20:
                 try:
                     score = bot.get_score(board)
                     if score is not None:
                         my_score = score if my_color == chess.WHITE else -score
                         if my_score < SETTINGS["LOSING_SCORE_THRESHOLD"]:
-                            client.bots.post_message(game_id, pick_message("losing_realization"))
+                            client.bots.post_chat_message(game_id, room="player", text=pick_message("losing_realization"))
                             losing_msg_sent = True
-                except: pass
+                except Exception as e: 
+                    print(f"⚠️ Kaybetme farkındalık mesajı hatası: {e}")
 
             if board.turn == my_color and not board.is_game_over():
                 move = bot.get_best_move(
@@ -402,7 +403,6 @@ def main():
         print(f"Bağlantı/Config Hatası: {e}")
         return
 
-    # 🔥 BAĞLANTI DÜZELTMESİ: config.yml'deki max_games alanını anlık olarak SETTINGS'e bağla!
     if config and "matchmaking" in config:
         if "max_games" in config["matchmaking"]:
             SETTINGS["MAX_PARALLEL_GAMES"] = config["matchmaking"]["max_games"]
@@ -440,14 +440,18 @@ def main():
                         len(active_games) < SETTINGS["MAX_PARALLEL_GAMES"] and accept
                     )
 
-                    if can_accept:
-                        client.challenges.accept(ch_id)
-                        print(f"✅ Kabul: {ch_id} — {reason}", flush=True)
-                    else:
-                        decline_reason = 'later' if (should_stop or close_to_end) else 'generic'
-                        client.challenges.decline(ch_id, reason=decline_reason)
-                        print(f"❌ Reddedildi: {ch_id} — {reason}", flush=True)
-                        if should_stop and len(active_games) == 0: os._exit(0)
+                    # 🔥 DÜZELTME: Meydan okuma kabul/ret adımları yerel try-except bloğuna alındı
+                    try:
+                        if can_accept:
+                            client.challenges.accept(ch_id)
+                            print(f"✅ Kabul: {ch_id} — {reason}", flush=True)
+                        else:
+                            decline_reason = 'later' if (should_stop or close_to_end) else 'generic'
+                            client.challenges.decline(ch_id, reason=decline_reason)
+                            print(f"❌ Reddedildi: {ch_id} — {reason}", flush=True)
+                            if should_stop and len(active_games) == 0: os._exit(0)
+                    except Exception as ce:
+                        print(f"⚠️ Meydan okuma işlenirken hata (Muhtemelen karşı taraf iptal etti): {ce}", flush=True)
 
                 elif event['type'] == 'gameStart':
                     game_id = event['game']['id']

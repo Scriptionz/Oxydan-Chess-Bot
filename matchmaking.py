@@ -97,6 +97,9 @@ class RatingTracker:
                 print(f"⚠️ [RatingTracker] Dinamik baseline alınamadı, varsayılanlar aktif: {e}")
 
     def record_result(self, result, mode, new_rating=None):
+        # DÜZELTME 1: Tetikleyici maçın koruma hakkından yememesi için durum kontrolü saklanır
+        was_in_protection_before = self.in_protection
+
         if new_rating and mode in self.current:
             old = self.current[mode]
             self.current[mode] = new_rating
@@ -113,7 +116,8 @@ class RatingTracker:
         else:
             self.losing_streak = 0
 
-        if self.in_protection:
+        # Sayacı sadece zaten koruma altındayken oynanan yeni maçlar için düşüyoruz
+        if was_in_protection_before:
             self.protection_games -= 1
             if self.protection_games <= 0:
                 self.in_protection = False
@@ -141,14 +145,14 @@ class Matchmaker:
         self.my_id             = None
         self.bot_pool          = []
         self.blacklist         = {}
-        self.opponent_tracker  = {}  # DÜZELTME 2 için aktif takip havuzu
+        self.opponent_tracker  = {}  
         self.last_pool_update  = 0
         self.wait_timeout      = 120
         self.registered_tournaments = set()
         self.last_tournament_join   = 0
         self.token             = token
         
-        # DÜZELTME 3: YAML Ayarlarını global SETTINGS ile birleştirir
+        # YAML Ayarlarını global SETTINGS ile birleştirir
         self._apply_config_overrides()
         
         self.rating_tracker    = RatingTracker(self.client)
@@ -236,7 +240,7 @@ class Matchmaker:
     def _join_arena(self, tid):
         try:
             r = requests.post(
-                f"https://lichess.org/api/tournament/{tid}/join",
+                "https://lichess.org/api/tournament/{}/join".format(tid),
                 headers=self._auth_headers(), timeout=10
             )
             return r.status_code == 200
@@ -247,7 +251,7 @@ class Matchmaker:
     def _join_swiss(self, sid):
         try:
             r = requests.post(
-                f"https://lichess.org/api/swiss/{sid}/join",
+                "https://lichess.org/api/swiss/{}/join".format(sid),
                 headers=self._auth_headers(), timeout=10
             )
             return r.status_code == 200
@@ -292,7 +296,7 @@ class Matchmaker:
     def _cleanup_history(self):
         if len(self.registered_tournaments) > 500:
             self.registered_tournaments.clear()
-        self.opponent_tracker.clear()  # Bellek sızıntısını ve kalıcı bloklanmayı önlemek için sıfırlanır
+        self.opponent_tracker.clear()  
         print("🧹 [System] Turnuva ve son rakip hafızası temizlendi.")
 
     # ==========================================================
@@ -326,7 +330,6 @@ class Matchmaker:
 
         limit_sn = tc.get('limit', 0)
 
-        # Son maç kontrolü (Gelen istekler için de aktif)
         if self.opponent_tracker.get(user_id, 0) >= 3:
             return False, "Too many games with this opponent recently."
 
@@ -399,7 +402,6 @@ class Matchmaker:
                 time.sleep(10)
 
     def _find_suitable_target(self):
-        """DÜZELTME 1: Toplu API çağrısı ile 429 hataları tamamen engellendi."""
         self._refresh_bot_pool()
         tier      = self._pick_tier()
         tier_name = _TIER_NAME.get(tier, "?")
@@ -418,20 +420,18 @@ class Matchmaker:
         tc_str           = random.choice(tc_pool)
         limit_sn, inc_sn = _parse_tc(tc_str)
 
-        if limit_sn < 180:    mode = 'bullet'
+        if limit_sn < 180:   mode = 'bullet'
         elif limit_sn < 480:  mode = 'blitz'
         elif limit_sn < 1500: mode = 'rapid'
         else:                 mode = 'classical'
 
         random.shuffle(self.bot_pool)
         
-        # Karalistede olmayan ilk 50 adayı dilimle
         candidates = [b for b in self.bot_pool if (b not in self.blacklist or self.blacklist[b] <= now)][:50]
         if not candidates:
             return None, 0, 0, 0, False, tier_name
 
         try:
-            # 🚀 ULTRA OPTİMİZASYON: 50 botun profil verisini TEK SEFERDE çekiyoruz.
             users_data = self.client.users.get_by_ids(candidates)
             for user in users_data:
                 bot_id = user.get('id')
@@ -444,7 +444,6 @@ class Matchmaker:
                     return bot_id, rating, limit_sn, inc_sn, is_rated, tier_name
         except Exception as e:
             print(f"⚠️ [Matchmaker] Toplu veri çekme başarısız ({e}), eski güvenli moda dönülüyor...")
-            # Fallback (API çökme ihtimaline karşı koruma)
             for bot_id in candidates[:5]:
                 try:
                     data = self.client.users.get_public_data(bot_id)
@@ -459,9 +458,8 @@ class Matchmaker:
     def record_game_result(self, result, mode, new_rating=None, opponent_id=None):
         """Oyun bittiğinde ana dosyadan çağrılır."""
         self.rating_tracker.record_result(result, mode, new_rating)
-        if opponent_id:
-            # Maç bitince de sayacı arttırarak güvenlik çemberini sıkılaştırıyoruz
-            self.opponent_tracker[opponent_id] = self.opponent_tracker.get(opponent_id, 0) + 1
+        # DÜZELTME 2: Mükerrer artırım kaldırıldı. Sayaç sadece challenge atıldığında/alındığında işlenecek.
+
 
     # ==========================================================
     # 🚀 ANA DÖNGÜ
@@ -503,7 +501,7 @@ class Matchmaker:
                         self.blacklist[target] = datetime.now() + timedelta(
                             minutes=SETTINGS["BLACKLIST_MINUTES"]
                         )
-                        # DÜZELTME 2: Gönderilen meydan okumayı takip listesine ekle
+                        
                         self.opponent_tracker[target] = self.opponent_tracker.get(target, 0) + 1
 
                         self.client.challenges.create(

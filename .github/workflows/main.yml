@@ -43,20 +43,23 @@ jobs:
           sudo apt-get install -y build-essential clang
           cd src
           
-          echo "🧹 Temizlik yapılıyor..."
-          make clean 2>/dev/null || true
+          echo "🧹 Dosyalar temizleniyor..."
+          rm -f *.o Ethereal
           
-          echo "🚀 PGO hatalarını atlayıp direkt optimize derleme başlatılıyor..."
+          echo "🚀 Makefile'a güvenmeden, doğrudan Clang ile derleniyor..."
           
-          # 'pgo' yerine doğrudan 'native' hedefliyoruz.
-          # Ayrıca USE_NNUE=1 parametresini buraya manuel ekliyoruz.
-          make native COMP=clang ARCH=x86-64-avx2 USE_NNUE=1
+          # 1. '-DUSE_NNUE=1' ile nöral ağı aktif ettik.
+          # 2. '-mavx2 -mpopcnt' ile AVX2 hatalarını gömdük.
+          # 3. Tüm .c dosyalarını ve nnue klasörünü tek seferde derliyoruz.
+          # 4. 'make' komutuna ihtiyaç duymadan, doğrudan clang ile build alıyoruz.
           
-          # Derleme sonrası oluşan dosyanın ismini sabitleyelim
+          clang -O3 -std=gnu11 -Wall -Wextra -DNDEBUG -flto -DUSE_NNUE=1 -march=native -mavx2 -mpopcnt -msse4.1 -I. -Innue *.c pyrrhic/tbprobe.c nnue/*.c -lpthread -lm -o Ethereal
+          
           if [ -f Ethereal ]; then
-            echo "✅ Motor başarıyla derlendi."
+            chmod +x Ethereal
+            echo "✅ Motor başarıyla derlendi: $(ls -lh Ethereal)"
           else
-            echo "❌ Derleme başarısız, çıktı bulunamadı."
+            echo "❌ Derleme başarısız."
             exit 1
           fi
           cd ..

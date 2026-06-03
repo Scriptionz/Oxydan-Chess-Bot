@@ -15,17 +15,15 @@ jobs:
     steps:
       - name: Kodlari Cek
         uses: actions/checkout@v4
-        # LFS: true satırını sildik, artık ihtiyacımız yok
 
       - name: Python Kurulumu
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11' # Gelişmiş havuz yönetimi ve performans için 3.11'e çekildi
 
       - name: Cerebellum Kitabini Indir ve Kur
         run: |
           echo "📚 Devasa açılış kitabı indiriliyor..."
-          # Release linkini kullanarak ZIP dosyasını çekiyoruz
           curl -L "https://github.com/Scriptionz/Oxydan-Chess-Bot/releases/download/v1_Book/Cerebellum3Merge.zip" -o book.zip
           
           echo "📂 ZIP'ten çıkarılıyor..."
@@ -33,27 +31,29 @@ jobs:
           
           # Dosya adını kodun tanıması için 'book.bin' yapıyoruz
           mv Cerebellum3Merge.bin book.bin
-          
           echo "✅ Kitap hazır: $(ls -lh book.bin)"
-
-      - name: Motoru Derle
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential clang
-          cd src
-          clang -O3 -std=gnu11 -Wall -Wextra -DNDEBUG -flto -DUSE_NNUE=0 -march=native *.c pyrrhic/tbprobe.c -lpthread -lm -o Ethereal
-          chmod +x Ethereal
-          echo "Motor basariyla derlendi."
-          cd ..
 
       - name: Kutuphaneleri Kur
         run: |
           pip install -r requirements.txt
 
-      - name: Motor Test (UCI Testi)
+      - name: Motoru Derle (Oxydan V11 NNUE Core)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang
+          cd src
+          # 🚀 KRİTİK: Oxydan 11'in nöral gücünü aktifleştirmek için USE_NNUE=1 yapıldı
+          clang -O3 -std=gnu11 -Wall -Wextra -DNDEBUG -flto -DUSE_NNUE=1 -march=native *.c pyrrhic/tbprobe.c -lpthread -lm -o Ethereal
+          chmod +x Ethereal
+          echo "Motor başarıyla derlendi."
+          cd ..
+
+      - name: Oxydan V11 Pre-Flight Diagnostics (Gelişmiş Teşhis)
         run: |
           chmod +x ./src/Ethereal
-          echo "uci" | ./src/Ethereal | grep "uciok" || (echo "MOTOR CALISMIYOR!" && exit 1)
+          # Yeni güncellediğimiz check_bot.py dosyasını çalıştırarak 
+          # sınıf uyumluluğunu ve zombi süreç kalıntılarını denetliyoruz.
+          python check_bot.py
 
       - name: Botu Baslat
         env:

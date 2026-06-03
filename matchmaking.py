@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta
 
 # ==========================================================
-# ⚙️ AYARLAR
+# ⚙️ VARSAYILAN AYARLAR (YAML yoksa veya eksikse kullanılır)
 # ==========================================================
 SETTINGS = {
     "RATED_MODE":            True,
@@ -48,24 +48,18 @@ SETTINGS = {
     "RATING_DROP_THRESHOLD": 50,
     "PROTECTION_GAME_COUNT": 10,
 
-    # Kalıcı kara liste — bu botlara asla meydan okuma gönderilmez,
-    # gelen meydan okumaları da reddedilir. (hepsi küçük harf olmalı)
+    # Kalıcı kara liste (Küçük harf olmalı)
     "PERMANENT_BLACKLIST": {
-        "waychess-bot",  # Botu gereksiz yere meşgul ediyor
+        "waychess-bot",
     },
 }
 
-# ==========================================================
-# PROTOKOL
-# ==========================================================
-# İNSANLAR : 1500+, puansız, 0.5+0→30+0, Standart+Chess960
-# BOTLAR    : <1500 reddet
-#             1500-2000 → puansız, max 10+0
-#             2000-2300 → puanlı,  max 10+0
-#             2300+     → puanlı,  her format
-# MATCHMAKER: Elite %32 | High %35 | Mid %23 | Low %10
-# KORUMA    : 3 üst üste kayıp veya 50 puan düşüş → Mid kilitli (10 maç)
-# ==========================================================
+_TIER_NAME = {
+    (2700, 4000): "Elite",
+    (2300, 2700): "High",
+    (2000, 2300): "Mid",
+    (1500, 2000): "Low",
+}
 
 def _parse_tc(tc_str):
     if '+' in tc_str:
@@ -74,19 +68,11 @@ def _parse_tc(tc_str):
     return int(tc_str), 0
 
 
-# Tier adı yardımcısı (TIER_NAMES dead code'u kaldırıldı, tek yerde tanımlı)
-_TIER_NAME = {
-    (2700, 4000): "Elite",
-    (2300, 2700): "High",
-    (2000, 2300): "Mid",
-    (1500, 2000): "Low",
-}
-
-
 class RatingTracker:
     """Kötü seri ve puan düşüşü takibi."""
 
-    def __init__(self):
+    def __init__(self, client=None):
+        self.client = client
         self.baseline = {
             'bullet': 2931, 'blitz': 2889,
             'rapid': 2925,  'classical': 2773, 'chess960': 2021,
@@ -96,8 +82,21 @@ class RatingTracker:
         self.protection_games = 0
         self.in_protection    = False
 
+    def initialize_baselines(self):
+        """DÜZELTME 4: Botun başlangıç reytinglerini API'den dinamik olarak çeker."""
+        if self.client:
+            try:
+                data = self.client.account.get()
+                perfs = data.get('perfs', {})
+                for mode in self.baseline:
+                    if mode in perfs and 'rating' in perfs[mode]:
+                        self.baseline[mode] = perfs[mode]['rating']
+                self.current = dict(self.baseline)
+                print(f"📊 [RatingTracker] Dinamik baseline reytingleri yüklendi: {self.current}")
+            except Exception as e:
+                print(f"⚠️ [RatingTracker] Dinamik baseline alınamadı, varsayılanlar aktif: {e}")
+
     def record_result(self, result, mode, new_rating=None):
-        # Puan düşüşü kontrolü
         if new_rating and mode in self.current:
             old = self.current[mode]
             self.current[mode] = new_rating
@@ -107,17 +106,13 @@ class RatingTracker:
                     f"{mode.capitalize()} puanı {drop} puan düştü ({old}→{new_rating})"
                 )
 
-        # Seri kontrolü
         if result == 'loss':
             self.losing_streak += 1
             if self.losing_streak >= SETTINGS["LOSING_STREAK_LIMIT"]:
-                self._activate_protection(
-                    f"{self.losing_streak} üst üste kayıp"
-                )
+                self._activate_protection(f"{self.losing_streak} üst üste kayıp")
         else:
             self.losing_streak = 0
 
-        # Koruma geri sayımı
         if self.in_protection:
             self.protection_games -= 1
             if self.protection_games <= 0:
@@ -139,26 +134,45 @@ class RatingTracker:
 class Matchmaker:
     def __init__(self, client, config, active_games, token):
         self.client            = client
+        self.raw_config        = config
         self.config            = config.get("matchmaking", {})
         self.enabled           = self.config.get("allow_feed", True)
         self.active_games      = active_games
         self.my_id             = None
         self.bot_pool          = []
         self.blacklist         = {}
-        self.opponent_tracker  = {}
+        self.opponent_tracker  = {}  # DÜZELTME 2 için aktif takip havuzu
         self.last_pool_update  = 0
         self.wait_timeout      = 120
         self.registered_tournaments = set()
         self.last_tournament_join   = 0
         self.token             = token
-        self.rating_tracker    = RatingTracker()
+        
+        # DÜZELTME 3: YAML Ayarlarını global SETTINGS ile birleştirir
+        self._apply_config_overrides()
+        
+        self.rating_tracker    = RatingTracker(self.client)
+        self.rating_tracker.initialize_baselines()
         self._initialize_id()
+
+    def _apply_config_overrides(self):
+        """YAML ayarlarını güvenli bir şekilde script ayarlarına enjekte eder."""
+        if "rated_mode" in self.config:
+            SETTINGS["RATED_MODE"] = self.config["rated_mode"]
+        if "max_games" in self.config:
+            SETTINGS["MAX_PARALLEL_GAMES"] = self.config["max_games"]
+        if "chess960_chance" in self.config:
+            SETTINGS["CHESS960_CHANCE"] = self.config["chess960_chance"]
+        if "permanent_blacklist" in self.config:
+            yaml_bl = {b.lower() for b in self.config["permanent_blacklist"]}
+            SETTINGS["PERMANENT_BLACKLIST"].update(yaml_bl)
 
     def _initialize_id(self):
         try:
             self.my_id = self.client.account.get()['id']
             print(f"[Matchmaker] Bağlantı Başarılı. ID: {self.my_id}")
-        except:
+        except Exception as e:
+            print(f"⚠️ [Matchmaker] ID alınamadı, varsayılan isim atanıyor: {e}")
             self.my_id = "oxydan"
 
     def _is_stop_triggered(self):
@@ -169,22 +183,12 @@ class Matchmaker:
             return True
         return False
 
-    def _get_bot_rating(self, bot_id, clock_limit_sn):
-        try:
-            if clock_limit_sn < 180:    mode = 'bullet'
-            elif clock_limit_sn < 480:  mode = 'blitz'
-            elif clock_limit_sn < 1500: mode = 'rapid'
-            else:                        mode = 'classical'
-            data = self.client.users.get_public_data(bot_id)
-            return data.get('perfs', {}).get(mode, {}).get('rating', 0)
-        except:
-            return 0
-
     def _is_in_tournament_game(self):
         try:
             ongoing = self.client.games.get_ongoing()
             return any(g.get('tournamentId') or g.get('swissId') for g in ongoing)
-        except:
+        except Exception as e:
+            print(f"⚠️ [Matchmaker] Devam eden maç kontrolü başarısız: {e}")
             return False
 
     # ==========================================================
@@ -207,7 +211,7 @@ class Matchmaker:
                 data = r.json()
                 return data.get('created', []) + data.get('started', [])
         except Exception as e:
-            print(f"⚠️ [Arena] {e}")
+            print(f"⚠️ [Arena] Turnuva listesi çekilemedi: {e}")
         return []
 
     def _fetch_swiss_tournaments(self):
@@ -226,7 +230,7 @@ class Matchmaker:
                             try: swiss_list.append(json.loads(line))
                             except: pass
             except Exception as e:
-                print(f"⚠️ [Swiss] {team}: {e}")
+                print(f"⚠️ [Swiss] {team} verisi çekilemedi: {e}")
         return swiss_list
 
     def _join_arena(self, tid):
@@ -237,7 +241,7 @@ class Matchmaker:
             )
             return r.status_code == 200
         except Exception as e:
-            print(f"⚠️ [Arena] Katılım: {e}")
+            print(f"⚠️ [Arena] Katılım hatası: {e}")
             return False
 
     def _join_swiss(self, sid):
@@ -248,7 +252,7 @@ class Matchmaker:
             )
             return r.status_code == 200
         except Exception as e:
-            print(f"⚠️ [Swiss] Katılım: {e}")
+            print(f"⚠️ [Swiss] Katılım hatası: {e}")
             return False
 
     def _manage_tournaments(self):
@@ -288,10 +292,11 @@ class Matchmaker:
     def _cleanup_history(self):
         if len(self.registered_tournaments) > 500:
             self.registered_tournaments.clear()
-            print("🧹 [System] Turnuva hafızası temizlendi.")
+        self.opponent_tracker.clear()  # Bellek sızıntısını ve kalıcı bloklanmayı önlemek için sıfırlanır
+        print("🧹 [System] Turnuva ve son rakip hafızası temizlendi.")
 
     # ==========================================================
-    # 📋 PROTOKOL — Meydan Okuma Kabulü
+    # 📋 PROTOKOL — Gelen Meydan Okuma Kabulü
     # ==========================================================
 
     def is_challenge_acceptable(self, challenge):
@@ -312,7 +317,6 @@ class Matchmaker:
         is_bot  = title == 'BOT'
         rated   = challenge.get('rated', False)
 
-        # DÜZELTME 1: Kalıcı blacklist kontrolü (gelen meydan okumalar için)
         if user_id.lower() in SETTINGS["PERMANENT_BLACKLIST"]:
             return False, f"{user_id} is permanently blacklisted."
 
@@ -322,10 +326,11 @@ class Matchmaker:
 
         limit_sn = tc.get('limit', 0)
 
+        # Son maç kontrolü (Gelen istekler için de aktif)
         if self.opponent_tracker.get(user_id, 0) >= 3:
             return False, "Too many games with this opponent recently."
 
-        # İNSAN
+        # İNSAN PROFILI
         if not is_bot:
             if rating < 1500:
                 return False, "Human rating below 1500."
@@ -333,9 +338,10 @@ class Matchmaker:
                 return False, "Humans must play casual."
             if limit_sn < 30 or limit_sn > 1800:
                 return False, "Time control out of range (0.5+0 to 30+0)."
+            self.opponent_tracker[user_id] = self.opponent_tracker.get(user_id, 0) + 1
             return True, f"Accepted human ({rating})"
 
-        # BOT
+        # BOT PROFILI
         if rating < 1500:
             return False, "Bot rating below 1500."
         if 1500 <= rating < 2000:
@@ -343,26 +349,26 @@ class Matchmaker:
                 return False, "Bots 1500-2000 must play casual."
             if limit_sn > 600:
                 return False, "Max 10+0 for bots 1500-2000."
+            self.opponent_tracker[user_id] = self.opponent_tracker.get(user_id, 0) + 1
             return True, f"Accepted casual bot ({rating})"
         if 2000 <= rating < 2300:
             if limit_sn > 600:
                 return False, "Max 10+0 for bots 2000-2300."
+            self.opponent_tracker[user_id] = self.opponent_tracker.get(user_id, 0) + 1
             return True, f"Accepted rated bot ({rating})"
-        # 2300+
+        
+        # 2300+ Elite Bot
         if limit_sn < 30 or limit_sn > 1800:
             return False, "Time control out of range (0.5+0 to 30+0)."
+        
+        self.opponent_tracker[user_id] = self.opponent_tracker.get(user_id, 0) + 1
         return True, f"Accepted elite bot ({rating})"
 
     # ==========================================================
-    # 🎯 MATCHMAKER — Akıllı Tier Seçimi
+    # 🎯 MATCHMAKER — Akıllı Tier Seçimi ve Optimizasyon
     # ==========================================================
 
     def _pick_tier(self):
-        """
-        Koruma aktifse → Mid kilitli.
-        Değilse ağırlıklı rastgele:
-          Low %10 | Mid %23 | High %35 | Elite %32
-        """
         if self.rating_tracker.is_in_protection():
             print(f"🛡️ [Koruma] Mid kilitli — kalan: {self.rating_tracker.protection_games} maç")
             return SETTINGS["TIER_MID"]
@@ -383,19 +389,20 @@ class Matchmaker:
                 self.bot_pool = [
                     b.get('id') for b in online
                     if b.get('id') and b.get('id').lower() != (self.my_id or '').lower()
-                    # DÜZELTME 2: Bot havuzu oluşturulurken kalıcı blacklist filtrelenir
                     and b.get('id', '').lower() not in SETTINGS["PERMANENT_BLACKLIST"]
                 ]
                 random.shuffle(self.bot_pool)
                 self.last_pool_update = now
-                print(f"[Matchmaker] Bot havuzu: {len(self.bot_pool)} bot")
-            except:
+                print(f"[Matchmaker] Temiz bot havuzu güncellendi: {len(self.bot_pool)} bot aktif.")
+            except Exception as e:
+                print(f"⚠️ [Matchmaker] Bot havuzu yenilenirken hata: {e}")
                 time.sleep(10)
 
     def _find_suitable_target(self):
+        """DÜZELTME 1: Toplu API çağrısı ile 429 hataları tamamen engellendi."""
         self._refresh_bot_pool()
         tier      = self._pick_tier()
-        tier_name = _TIER_NAME.get(tier, "?")  # DÜZELTME 3: Dead code kaldırıldı, tek lookup
+        tier_name = _TIER_NAME.get(tier, "?")
         now       = datetime.now()
 
         if tier == SETTINGS["TIER_LOW"]:
@@ -411,25 +418,50 @@ class Matchmaker:
         tc_str           = random.choice(tc_pool)
         limit_sn, inc_sn = _parse_tc(tc_str)
 
+        if limit_sn < 180:    mode = 'bullet'
+        elif limit_sn < 480:  mode = 'blitz'
+        elif limit_sn < 1500: mode = 'rapid'
+        else:                 mode = 'classical'
+
         random.shuffle(self.bot_pool)
-        for bot_id in self.bot_pool[:40]:
-            if bot_id in self.blacklist and self.blacklist[bot_id] > now:
-                continue
-            rating = self._get_bot_rating(bot_id, limit_sn)
-            time.sleep(0.3)
-            if tier[0] <= rating <= tier[1]:
-                return bot_id, rating, limit_sn, inc_sn, is_rated, tier_name
+        
+        # Karalistede olmayan ilk 50 adayı dilimle
+        candidates = [b for b in self.bot_pool if (b not in self.blacklist or self.blacklist[b] <= now)][:50]
+        if not candidates:
+            return None, 0, 0, 0, False, tier_name
+
+        try:
+            # 🚀 ULTRA OPTİMİZASYON: 50 botun profil verisini TEK SEFERDE çekiyoruz.
+            users_data = self.client.users.get_by_ids(candidates)
+            for user in users_data:
+                bot_id = user.get('id')
+                rating = user.get('perfs', {}).get(mode, {}).get('rating', 0)
+                
+                if self.opponent_tracker.get(bot_id, 0) >= 3:
+                    continue
+
+                if tier[0] <= rating <= tier[1]:
+                    return bot_id, rating, limit_sn, inc_sn, is_rated, tier_name
+        except Exception as e:
+            print(f"⚠️ [Matchmaker] Toplu veri çekme başarısız ({e}), eski güvenli moda dönülüyor...")
+            # Fallback (API çökme ihtimaline karşı koruma)
+            for bot_id in candidates[:5]:
+                try:
+                    data = self.client.users.get_public_data(bot_id)
+                    rating = data.get('perfs', {}).get(mode, {}).get('rating', 0)
+                    if tier[0] <= rating <= tier[1] and self.opponent_tracker.get(bot_id, 0) < 3:
+                        return bot_id, rating, limit_sn, inc_sn, is_rated, tier_name
+                except:
+                    continue
 
         return None, 0, 0, 0, False, tier_name
 
-    def record_game_result(self, result, mode, new_rating=None):
-        """
-        lichess-bot.py'den oyun sonunda çağrılır.
-        result: 'win' | 'loss' | 'draw'
-        mode:   'bullet' | 'blitz' | 'rapid' | 'classical' | 'chess960'
-        new_rating: opsiyonel yeni puan
-        """
+    def record_game_result(self, result, mode, new_rating=None, opponent_id=None):
+        """Oyun bittiğinde ana dosyadan çağrılır."""
         self.rating_tracker.record_result(result, mode, new_rating)
+        if opponent_id:
+            # Maç bitince de sayacı arttırarak güvenlik çemberini sıkılaştırıyoruz
+            self.opponent_tracker[opponent_id] = self.opponent_tracker.get(opponent_id, 0) + 1
 
     # ==========================================================
     # 🚀 ANA DÖNGÜ
@@ -437,10 +469,11 @@ class Matchmaker:
 
     def start(self):
         if not self.enabled:
+            print("🚫 Matchmaker YAML konfigürasyonu ile devre dışı bırakılmış.")
             return
 
-        print("🚀 Matchmaker v3 Aktif — Akıllı Koruma Protokolü")
-        print("   Tier: Elite %32 | High %35 | Mid %23 | Low %10")
+        print("🚀 Matchmaker v3.5 Optimize Aktif — Oxydan Aegis Protokolü")
+        print("   Dağılım: Elite %32 | High %35 | Mid %23 | Low %10")
         last_cleanup = time.time()
 
         while True:
@@ -470,6 +503,9 @@ class Matchmaker:
                         self.blacklist[target] = datetime.now() + timedelta(
                             minutes=SETTINGS["BLACKLIST_MINUTES"]
                         )
+                        # DÜZELTME 2: Gönderilen meydan okumayı takip listesine ekle
+                        self.opponent_tracker[target] = self.opponent_tracker.get(target, 0) + 1
+
                         self.client.challenges.create(
                             username=target,
                             rated=is_rated,
@@ -486,9 +522,9 @@ class Matchmaker:
             except Exception as e:
                 err = str(e)
                 if "429" in err:
-                    print(f"⚠️ Rate limit (429), {self.wait_timeout}sn bekleniyor.")
+                    print(f"⚠️ Rate limit (429) yakalandı, {self.wait_timeout}sn bekleniyor.")
                     time.sleep(self.wait_timeout)
                     self.wait_timeout = min(self.wait_timeout * 2, 900)
                 else:
-                    print(f"⚠️ [Matchmaker] Hata: {err}")
+                    print(f"⚠️ [Matchmaker Ana Döngü] Hata: {err}")
                     time.sleep(30)

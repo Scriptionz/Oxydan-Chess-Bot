@@ -42,10 +42,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential clang
           cd src
-          # 🚀 KRİTİK: Oxydan 11'in nöral gücünü aktifleştirmek için USE_NNUE=1 yapıldı
-          clang -O3 -std=gnu11 -Wall -Wextra -DNDEBUG -flto -DUSE_NNUE=1 -march=native *.c pyrrhic/tbprobe.c -lpthread -lm -o Ethereal
+          
+          echo "🚀 Klasör yapısı taranıyor ve tüm kaynak dosyaları derlemeye dahil ediliyor..."
+          
+          # $(find . -name "*.c") komutu sayesinde hem ana klasördeki hem de alt klasörlerdeki (nnue dahil) tüm C dosyaları eksiksiz derlenir.
+          clang -O3 -std=gnu11 -Wall -Wextra -DNDEBUG -flto -DUSE_NNUE=1 -march=native $(find . -name "*.c") -lpthread -lm -o Ethereal
+          
           chmod +x Ethereal
-          echo "Motor başarıyla derlendi."
+          echo "✅ Motor başarıyla derlendi."
           cd ..
 
       - name: Oxydan V11 Pre-Flight Diagnostics (Gelişmiş Teşhis)

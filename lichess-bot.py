@@ -475,6 +475,7 @@ def handle_game(client, game_id, bot, my_id, mm):
         losing_msg_sent  = False
         game_mode        = 'blitz'
         rated            = False
+        opp_id           = ''
 
         for state in stream:
             if 'error' in state: break
@@ -489,9 +490,6 @@ def handle_game(client, game_id, bot, my_id, mm):
                 opp_id      = opp.get('id', '')
                 opp_title   = (opp.get('title') or '').upper()
                 is_vs_human = opp_title != 'BOT'
-
-                if mm:
-                    mm.opponent_tracker[opp_id] = mm.opponent_tracker.get(opp_id, 0) + 1
 
                 # âœ… DÃœZELTME 3: Blacklist resign kontrolÃ¼
                 if opp_id.lower() in MM_SETTINGS.get("PERMANENT_BLACKLIST", set()):
@@ -578,7 +576,7 @@ def handle_game(client, game_id, bot, my_id, mm):
                     _send_message(client, game_id, pick_message("human_postgame"))
 
                 if mm and status != 'aborted':
-                    mm.record_game_result(result, game_mode)
+                    mm.record_game_result(result, game_mode, opponent_id=opp_id)
                 break
 
             # Kaybetme farkÄ±ndalÄ±k mesajÄ± (sadece insanlara, orta oyun+)
@@ -655,7 +653,11 @@ def main():
 
     mm = None
     if config and config.get("matchmaking"):
-        mm = Matchmaker(client, config, active_games, token=SETTINGS["TOKEN"])
+        mm = Matchmaker(
+            client, config, active_games,
+            token=SETTINGS["TOKEN"],
+            active_games_lock=active_games_lock
+        )
         threading.Thread(target=mm.start, daemon=True).start()
 
     # âœ… DÃœZELTME 1: runtime_watchdog artÄ±k tanÄ±mlÄ±, sorunsuz baÅŸlar

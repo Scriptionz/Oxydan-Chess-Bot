@@ -389,8 +389,9 @@ class OxydanV11:
                 black_inc=black_inc,
             )
             
-            # ✅ GÜNCELLEME: Motorun kilitlenme/çökme riskine karşı güvenlik paylı timeout eklendi.
-            result = engine.play(board, limit, timeout=think + 0.5)
+            # ✅ DÜZELTİLDİ: TypeError veren 'timeout=think + 0.5' parametresi kaldırıldı.
+            # python-chess kütüphanesinde zaman sınırı zaten yukarıdaki 'limit' nesnesi üzerinden motora iletilir.
+            result = engine.play(board, limit)
             
             if result.move and result.move in board.legal_moves:
                 if len(board.move_stack) <= 10:

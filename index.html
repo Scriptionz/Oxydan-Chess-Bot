@@ -1,390 +1,646 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Oxydan 11 | Live Dashboard</title>
-    <style>
-        :root {
-            --bg-dark: #0d1117;
-            --panel-dark: #161b22;
-            --accent-blue: #58a6ff;
-            --text-main: #c9d1d9;
-            --text-dim: #8b949e;
-            --border: #30363d;
-            --success: #238636;
-            --warning: #d29922;
-            --danger: #f85149;
-            --purple: #bc8cff;
-        }
-
-        * { box-sizing: border-box; }
-
-        body {
-            background-color: var(--bg-dark);
-            color: var(--text-main);
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            line-height: 1.6;
-            margin: 0;
-            padding: 10px;
-        }
-
-        .main-wrapper { max-width: 1000px; margin: 20px auto; padding: 10px; }
-
-        header { text-align: center; margin-bottom: 40px; }
-
-        .container {
-            border: 1px solid var(--border);
-            padding: 30px;
-            border-radius: 20px;
-            background: var(--panel-dark);
-            box-shadow: 0 20px 50px rgba(0,0,0,0.6);
-        }
-
-        h1 { color: var(--accent-blue); font-size: 2.5em; margin-bottom: 0.2em; letter-spacing: -1px; }
-        h2 { color: var(--accent-blue); border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-top: 40px; }
-        h3 { color: #f0f6fc; margin-top: 25px; font-size: 1.2em; }
-
-        .elo-badge {
-            background: linear-gradient(135deg, #1f6feb, #58a6ff);
-            color: white;
-            padding: 8px 25px;
-            border-radius: 50px;
-            font-weight: 800;
-            font-size: 1.2em;
-            display: inline-block;
-            box-shadow: 0 4px 15px rgba(88, 166, 255, 0.3);
-        }
-
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-            margin-top: 30px;
-            text-align: left;
-        }
-
-        .card {
-            background: #0d1117;
-            padding: 20px;
-            border-radius: 12px;
-            border: 1px solid var(--border);
-            transition: transform 0.2s ease, border-color 0.2s ease;
-        }
-
-        .card:hover {
-            transform: translateY(-2px);
-            border-color: var(--accent-blue);
-        }
-
-        .rule-card {
-            border-left: 5px solid var(--success);
-            margin-bottom: 12px;
-            padding: 10px 15px;
-            background: rgba(255,255,255,0.02);
-            border-radius: 0 8px 8px 0;
-            font-size: 0.9.em;
-        }
-
-        .tech-section {
-            text-align: left;
-            background: #0d1117;
-            padding: 25px;
-            border-radius: 12px;
-            margin-top: 30px;
-        }
-
-        .license-section {
-            margin-top: 40px;
-            padding-top: 20px;
-            border-top: 1px solid var(--border);
-            font-size: 0.9em;
-            color: var(--text-dim);
-        }
-
-        .feature-list { list-style: none; padding: 0; }
-        .feature-list li { margin-bottom: 12px; padding-left: 25px; position: relative; }
-        .feature-list li::before {
-            content: "▹"; position: absolute; left: 0; color: var(--accent-blue); font-weight: bold;
-        }
-
-        .stat-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 15px;
-            margin: 30px 0;
-        }
-
-        .stat-card {
-            background: #0d1117;
-            border: 1px solid #30363d;
-            padding: 15px;
-            border-radius: 12px;
-            text-align: center;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-        }
-
-        .stat-label { margin: 0; color: #8b949e; font-size: 0.75em; text-transform: uppercase; letter-spacing: 1px; }
-        .stat-value { font-size: 1.6rem; font-weight: 800; margin: 5px 0; }
-        .stat-sub { font-size: 0.7rem; color: #8b949e; }
-
-        /* Mobile Responsive Table Container */
-        .table-container {
-            width: 100%;
-            overflow-x: auto;
-            background: #0d1117;
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 15px;
-            margin-top: 20px;
-            -webkit-overflow-scrolling: touch;
-        }
-
-        table { width: 100%; border-collapse: collapse; text-align: left; min-width: 500px; }
-        th { padding: 10px; color: var(--text-dim); border-bottom: 1px solid var(--border); font-size: 0.9em; }
-        td { padding: 12px; border-bottom: 1px solid #21262d; }
-
-        .flex-container {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-            margin-top: 30px;
-        }
-
-        .badge-elite {
-            background: linear-gradient(135deg, rgba(35,134,54,0.15), rgba(13,17,23,1));
-            border: 1px solid #238636;
-            border-radius: 12px;
-            padding: 25px;
-            text-align: center;
-        }
-
-        .tag { background: rgba(88,166,255,0.1); color: var(--accent-blue); padding: 2px 8px; border-radius: 4px; font-size: 0.8em; }
-        .new-badge {
-            background: rgba(35,134,54,0.2); color: #3fb950; border: 1px solid #238636;
-            padding: 2px 8px; border-radius: 4px; font-size: 0.7em; vertical-align: middle; margin-left: 6px;
-        }
-
-        footer { margin-top: 50px; padding: 20px; font-size: 0.85em; color: var(--text-dim); text-align: center; }
-        .neon-text { text-shadow: 0 0 20px rgba(88, 166, 255, 0.4); }
-
-        /* Large screens layout adaptation */
-        @media (min-width: 768px) {
-            body { padding: 20px; }
-            h1 { font-size: 3.2em; }
-            .flex-container { flex-direction: row; }
-            .flex-container .table-container { flex: 2; }
-            .flex-container .badge-elite { flex: 1; display: flex; flex-direction: column; justify-content: center; }
-        }
-    </style>
-</head>
-<body>
-
-<div class="main-wrapper">
-    <header>
-        <h1 class="neon-text">🌌 OXYDAN 11</h1>
-        <div class="elo-badge" id="top-peak">⚡ LOADING RATINGS...</div>
-        <p style="font-size: 1.1em; margin-top: 15px; color: var(--text-main);">
-            Special Bot For Lichess | Optimized by <strong>Emir Karadağ</strong>
-        </p>
-    </header>
-
-    <div class="container">
-
-        <section id="mission">
-            <h2>🎯 Project Overview</h2>
-            <p>Oxydan 11 is not just a chess bot — it is a high-performance computational experiment. Built upon the legendary <strong>Ethereal core</strong>, Oxydan utilizes state-of-the-art Alpha-Beta searching paired with <strong>Efficiently Updatable Neural Networks (NNUE)</strong>. This version (11.0) is fine-tuned for the modern Lichess ecosystem, balancing aggressive tactical play with profound positional understanding.</p>
-        </section>
-
-        <div class="grid">
-            <div class="card">
-                <h3>♟️ Challenge Protocol <span class="new-badge">v3.0 - June 2026</span></h3>
-                <div class="rule-card" style="border-left-color: var(--success);">
-                    <strong>🏆 ELITE BOTS (2300+ ELO)</strong><br>Rated · All formats · Standard + Chess960
-                </div>
-                <div class="rule-card" style="border-left-color: var(--accent-blue);">
-                    <strong>⚔️ MID BOTS (2000–2300 ELO)</strong><br>Rated · Max 10+0 · Standard + Chess960
-                </div>
-                <div class="rule-card" style="border-left-color: var(--warning);">
-                    <strong>🌱 CHALLENGER BOTS (1500–2000 ELO)</strong><br>Casual · Max 10+0 · Standard + Chess960
-                </div>
-                <div class="rule-card" style="border-left-color: var(--danger);">
-                    <strong>⚠️ RESTRICTED</strong><br>Under 1500 ELO auto-declined to preserve engine resources.
-                </div>
-            </div>
-
-            <div class="card">
-                <h3>⚙️ Core Engine Specs</h3>
-                <ul class="feature-list">
-                    <li><strong>Engine:</strong> Ethereal (Neural Hybrid core)</li>
-                    <li><strong>Search:</strong> Selective Depth Alpha-Beta</li>
-                    <li><strong>Evaluation:</strong> NNUE (Classical + Neural Hybrid)</li>
-                    <li><strong>Tablebases:</strong> 7-Piece Syzygy (Lichess API Live Probing)</li>
-                    <li><strong>Book:</strong> Cerebellum3Merge (Master Theory Optimized)</li>
-                    <li><strong>Opening Memory:</strong> Anti-repetition tracker (last 10 games)</li>
-                    <li><strong>Infrastructure:</strong> GitHub Actions automated pipeline</li>
-                </ul>
-            </div>
-        </div>
-
-        <h2>📊 Live Ratings <span style="font-size: 0.4em; color: var(--success); vertical-align: middle;">● LIVE FROM LICHESS</span></h2>
-        <div class="stat-grid">
-            <div class="stat-card" style="border-top: 4px solid #f85149;">
-                <h4 class="stat-label">🚀 Bullet</h4>
-                <div class="stat-value" id="bullet-val" style="color: #f85149;">...</div>
-                <div class="stat-sub" id="bullet-games">0 games</div>
-            </div>
-            <div class="stat-card" style="border-top: 4px solid #d29922;">
-                <h4 class="stat-label">⚡ Blitz</h4>
-                <div class="stat-value" id="blitz-val" style="color: #d29922;">...</div>
-                <div class="stat-sub" id="blitz-games">0 games</div>
-            </div>
-            <div class="stat-card" style="border-top: 4px solid #3fb950;">
-                <h4 class="stat-label">🕒 Rapid</h4>
-                <div class="stat-value" id="rapid-val" style="color: #3fb950;">...</div>
-                <div class="stat-sub" id="rapid-games">0 games</div>
-            </div>
-            <div class="stat-card" style="border-top: 4px solid var(--accent-blue);">
-                <h4 class="stat-label">🏛️ Classical</h4>
-                <div class="stat-value" id="classical-val" style="color: var(--accent-blue);">...</div>
-                <div class="stat-sub" id="classical-games">0 games</div>
-            </div>
-            <div class="stat-card" style="border-top: 4px solid var(--purple);">
-                <h4 class="stat-label">♾️ Chess960</h4>
-                <div class="stat-value" id="chess960-val" style="color: var(--purple);">...</div>
-                <div class="stat-sub" id="chess960-games">0 games</div>
-            </div>
-        </div>
-
-        <h2>🏅 Competitive Standing</h2>
-        <div class="flex-container">
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Category</th>
-                            <th>Current Rating</th>
-                            <th>Total Games</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody style="color: #f0f6fc;">
-                        <tr>
-                            <td>🚀 Bullet</td>
-                            <td id="t-bullet-val" style="font-weight: bold; color: #f85149;">...</td>
-                            <td id="t-bullet-games">...</td>
-                            <td><span class="tag">Top Tier</span></td>
-                        </tr>
-                        <tr>
-                            <td>⚡ Blitz</td>
-                            <td id="t-blitz-val" style="font-weight: bold; color: #d29922;">...</td>
-                            <td id="t-blitz-games">...</td>
-                            <td><span class="tag">Top Tier</span></td>
-                        </tr>
-                        <tr>
-                            <td>🕒 Rapid</td>
-                            <td id="t-rapid-val" style="font-weight: bold; color: #3fb950;">...</td>
-                            <td id="t-rapid-games">...</td>
-                            <td><span class="tag">Top Tier</span></td>
-                        </tr>
-                        <tr>
-                            <td>🏛️ Classical</td>
-                            <td id="t-classical-val" style="font-weight: bold; color: var(--accent-blue);">...</td>
-                            <td id="t-classical-games">...</td>
-                            <td><span class="tag">Active</span></td>
-                        </tr>
-                        <tr>
-                            <td>♾️ Chess960</td>
-                            <td id="t-chess960-val" style="font-weight: bold; color: var(--purple);">...</td>
-                            <td id="t-chess960-games">...</td>
-                            <td><span class="tag">Rising</span></td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="badge-elite">
-                <div style="font-size: 2.5em;">🏆</div>
-                <h3 style="margin: 10px 0 5px 0;">Elite Performance</h3>
-                <p style="font-size: 0.85em; color: var(--text-dim); margin: 0;">
-                    Oxydan 11 syncs directly with the Lichess network to display real-time computational capability.
-                </p>
-            </div>
-        </div>
-
-        <section style="margin-top: 40px;">
-            <h2>🆕 Core Capabilities</h2>
-            <div class="grid">
-                <div class="card">
-                    <h3>🤖 Game Management</h3>
-                    <ul class="feature-list">
-                        <li><strong>Auto-abort:</strong> Unresponsive opponents are safely dropped without penalty</li>
-                        <li><strong>Chess960 Evaluation:</strong> Complete castling and FEN validation</li>
-                        <li><strong>Overhead Mitigation:</strong> Kept at 100ms for tight bullet races</li>
-                    </ul>
-                </div>
-                <div class="card">
-                    <h3>💬 Communication Core</h3>
-                    <ul class="feature-list">
-                        <li><strong>Contextual Chat:</strong> Smart greeting and post-game analysis invites</li>
-                        <li><strong>Resignation Awareness:</strong> Handles severe position drops gracefully</li>
-                    </ul>
-                </div>
-            </div>
-        </section>
-
-    </div>
-
-    <footer>
-        <p>Developed with passion by <strong>Emir Karadağ</strong> | June 2026</p>
-        <p>Dynamic API Plugin Active.</p>
-    </footer>
-</div>
-
-<script>
-    // 💡 BURAYA LICHESS BOTUNUN KULLANICI ADINI YAZ:
-    const BOT_LICHESS_USERNAME = "OxydanBot"; 
-
-    async function fetchLichessStats() {
-        try {
-            const response = await fetch(`https://lichess.org/api/user/${BOT_LICHESS_USERNAME}`);
-            if (!response.ok) throw new Error('API request failed');
-            
-            const data = await response.json();
-            const perfs = data.perfs;
-
-            // Helper function to update elements safely
-            const updateStat = (id, tableId, gamesId, tableGamesId, perfData) => {
-                if (perfData) {
-                    const rating = perfData.rating + (perfData.prov ? '?' : '');
-                    document.getElementById(id).innerText = rating;
-                    document.getElementById(tableId).innerText = rating;
-                    document.getElementById(gamesId).innerText = perfData.games + " games";
-                    document.getElementById(tableGamesId).innerText = perfData.games;
-                }
-            };
-
-            // Update DOM with live data
-            updateStat('bullet-val', 't-bullet-val', 'bullet-games', 't-bullet-games', perfs.bullet);
-            updateStat('blitz-val', 't-bullet-val', 'blitz-games', 't-blitz-games', perfs.blitz);
-            updateStat('rapid-val', 't-rapid-val', 'rapid-games', 't-rapid-games', perfs.rapid);
-            updateStat('classical-val', 't-classical-val', 'classical-games', 't-classical-games', perfs.classical);
-            updateStat('chess960-val', 't-chess960-val', 'chess960-games', 't-chess960-games', perfs.chess960);
-
-            // Dynamically calculate and show highest peak rating in header
-            const ratings = [perfs.bullet?.rating, perfs.blitz?.rating, perfs.rapid?.rating].filter(Boolean);
-            const maxRating = Math.max(...ratings, 2800);
-            document.getElementById('top-peak').innerText = `⚡ ${maxRating}+ LIVE PERFORMANCE`;
-
-        } catch (error) {
-            console.error('Lichess API Error:', error);
-            document.getElementById('top-peak').innerText = `⚡ OXYDAN 11 ACTIVE`;
-        }
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Oxydan 11 | Live Dashboard</title>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --panel: #111821;
+      --line: #263341;
+      --text: #edf2f7;
+      --muted: #9aa8b6;
+      --blue: #58a6ff;
+      --green: #39d07f;
+      --gold: #e3b341;
+      --red: #ff6b6b;
+      --violet: #b48cff;
+      --cyan: #45d6d0;
+      --shadow: rgba(0, 0, 0, 0.38);
     }
 
-    // Run on load
-    window.addEventListener('DOMContentLoaded', fetchLichessStats);
-</script>
+    * { box-sizing: border-box; }
 
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 18% 8%, rgba(88, 166, 255, 0.18), transparent 30%),
+        radial-gradient(circle at 84% 12%, rgba(57, 208, 127, 0.12), transparent 28%),
+        linear-gradient(180deg, #0b0f14 0%, #0f141b 100%);
+    }
+
+    a { color: inherit; }
+
+    .page {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 24px 0 38px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 10px 0 22px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .mark {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(88, 166, 255, 0.45);
+      border-radius: 8px;
+      background: linear-gradient(145deg, rgba(88,166,255,0.18), rgba(57,208,127,0.10));
+      color: var(--blue);
+      font-weight: 900;
+      box-shadow: 0 12px 32px var(--shadow);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: clamp(1.35rem, 3vw, 2.15rem);
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    .brand p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    button, .link-button {
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #141d27;
+      color: var(--text);
+      padding: 8px 12px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: none;
+    }
+
+    button:hover, .link-button:hover {
+      border-color: var(--blue);
+      background: #182331;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(17, 24, 33, 0.92);
+      box-shadow: 0 20px 60px var(--shadow);
+    }
+
+    .hero-main {
+      padding: clamp(22px, 5vw, 42px);
+      min-height: 360px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .eyebrow {
+      color: var(--green);
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-weight: 900;
+    }
+
+    .hero-title {
+      margin: 12px 0;
+      max-width: 720px;
+      font-size: clamp(2.35rem, 6vw, 5.2rem);
+      line-height: 0.95;
+      letter-spacing: 0;
+    }
+
+    .hero-copy {
+      max-width: 720px;
+      color: var(--muted);
+      font-size: clamp(1rem, 2vw, 1.15rem);
+    }
+
+    .status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 22px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 11px;
+      background: rgba(255,255,255,0.03);
+      color: var(--muted);
+      font-size: 0.86rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--gold);
+      box-shadow: 0 0 14px currentColor;
+    }
+
+    .dot.ok { background: var(--green); color: var(--green); }
+    .dot.bad { background: var(--red); color: var(--red); }
+
+    .board-panel {
+      padding: 18px;
+      display: grid;
+      align-content: center;
+      gap: 16px;
+    }
+
+    .board {
+      width: min(100%, 360px);
+      aspect-ratio: 1;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      overflow: hidden;
+      border: 1px solid #304052;
+      border-radius: 8px;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04), 0 18px 40px var(--shadow);
+    }
+
+    .sq {
+      display: grid;
+      place-items: center;
+      font-weight: 900;
+      font-size: clamp(0.8rem, 2.6vw, 1.35rem);
+      color: rgba(237,242,247,0.86);
+    }
+
+    .light { background: #c8d4bd; color: #17212d; }
+    .dark { background: #476a52; }
+    .blue-piece { color: #0d47a1; }
+    .gold-piece { color: #7a4d00; }
+
+    .board-caption {
+      color: var(--muted);
+      text-align: center;
+      font-size: 0.92rem;
+    }
+
+    .section {
+      margin-top: 18px;
+      padding: 22px;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .section h2 {
+      margin: 0;
+      font-size: 1.2rem;
+      letter-spacing: 0;
+    }
+
+    .section small { color: var(--muted); }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .stat-card {
+      min-height: 126px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0d131a;
+      padding: 15px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .stat-card strong {
+      color: var(--muted);
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .stat-value {
+      margin-top: 10px;
+      font-size: 2rem;
+      font-weight: 900;
+      line-height: 1;
+    }
+
+    .stat-meta {
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    .content-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .mini-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0d131a;
+      padding: 16px;
+    }
+
+    .mini-card h3 {
+      margin: 0 0 10px;
+      font-size: 1rem;
+    }
+
+    .list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 9px;
+      color: var(--muted);
+    }
+
+    .list li {
+      display: grid;
+      grid-template-columns: 18px 1fr;
+      gap: 8px;
+      align-items: start;
+    }
+
+    .list li::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      margin-top: 8px;
+      border-radius: 50%;
+      background: var(--cyan);
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0d131a;
+    }
+
+    table {
+      width: 100%;
+      min-width: 640px;
+      border-collapse: collapse;
+    }
+
+    th, td {
+      padding: 12px 14px;
+      text-align: left;
+      border-bottom: 1px solid #202b36;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .tag {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 3px 8px;
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 700;
+    }
+
+    footer {
+      color: var(--muted);
+      text-align: center;
+      padding: 22px 0 0;
+      font-size: 0.88rem;
+    }
+
+    @media (max-width: 900px) {
+      .hero, .content-grid { grid-template-columns: 1fr; }
+      .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .topbar { align-items: flex-start; flex-direction: column; }
+      .actions { justify-content: flex-start; }
+    }
+
+    @media (max-width: 520px) {
+      .page { width: min(100% - 20px, 1180px); padding-top: 12px; }
+      .hero-main, .section { padding: 16px; }
+      .stat-grid { grid-template-columns: 1fr; }
+      .pill { white-space: normal; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <nav class="topbar" aria-label="Dashboard navigation">
+      <div class="brand">
+        <div class="mark" aria-hidden="true">O11</div>
+        <div>
+          <h1>Oxydan 11</h1>
+          <p>Live Lichess dashboard by Emir Karadag</p>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="refresh-btn" type="button">Refresh</button>
+        <a class="link-button" href="https://lichess.org/@/OxydanBot" target="_blank" rel="noreferrer">Open Lichess</a>
+      </div>
+    </nav>
+
+    <section class="hero">
+      <div class="panel hero-main">
+        <div>
+          <div class="eyebrow">Engine status</div>
+          <h2 class="hero-title">Oxydan 11 Live Control</h2>
+          <p class="hero-copy">
+            A clean public dashboard for the Oxydan chess bot: live ratings, match policy,
+            engine features and operational status without broken characters or mixed-up stats.
+          </p>
+          <div class="status-row">
+            <span class="pill"><span class="dot" id="api-dot"></span><span id="api-status">Waiting for Lichess</span></span>
+            <span class="pill" id="peak-pill">Peak: loading</span>
+            <span class="pill" id="last-sync">Last sync: not yet</span>
+          </div>
+        </div>
+      </div>
+
+      <aside class="panel board-panel" aria-label="Visual chess board">
+        <div class="board" id="visual-board" aria-hidden="true"></div>
+        <div class="board-caption">Balanced for blitz, bullet and bot-vs-bot testing.</div>
+      </aside>
+    </section>
+
+    <section class="panel section">
+      <div class="section-head">
+        <h2>Live Ratings</h2>
+        <small id="profile-line">Profile data will load from Lichess.</small>
+      </div>
+      <div class="stat-grid">
+        <article class="stat-card">
+          <strong>Bullet</strong>
+          <div class="stat-value" id="bullet-val" style="color: var(--red);">...</div>
+          <div class="stat-meta" id="bullet-games">0 games</div>
+        </article>
+        <article class="stat-card">
+          <strong>Blitz</strong>
+          <div class="stat-value" id="blitz-val" style="color: var(--gold);">...</div>
+          <div class="stat-meta" id="blitz-games">0 games</div>
+        </article>
+        <article class="stat-card">
+          <strong>Rapid</strong>
+          <div class="stat-value" id="rapid-val" style="color: var(--green);">...</div>
+          <div class="stat-meta" id="rapid-games">0 games</div>
+        </article>
+        <article class="stat-card">
+          <strong>Classical</strong>
+          <div class="stat-value" id="classical-val" style="color: var(--blue);">...</div>
+          <div class="stat-meta" id="classical-games">0 games</div>
+        </article>
+        <article class="stat-card">
+          <strong>Chess960</strong>
+          <div class="stat-value" id="chess960-val" style="color: var(--violet);">...</div>
+          <div class="stat-meta" id="chess960-games">0 games</div>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel section">
+      <div class="section-head">
+        <h2>Competitive Standing</h2>
+        <small>Updated from the same API response as the cards.</small>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>Current Rating</th>
+              <th>Total Games</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Bullet</td><td id="t-bullet-val">...</td><td id="t-bullet-games">...</td><td><span class="tag">Fast control</span></td></tr>
+            <tr><td>Blitz</td><td id="t-blitz-val">...</td><td id="t-blitz-games">...</td><td><span class="tag">Main pool</span></td></tr>
+            <tr><td>Rapid</td><td id="t-rapid-val">...</td><td id="t-rapid-games">...</td><td><span class="tag">Deep search</span></td></tr>
+            <tr><td>Classical</td><td id="t-classical-val">...</td><td id="t-classical-games">...</td><td><span class="tag">Long control</span></td></tr>
+            <tr><td>Chess960</td><td id="t-chess960-val">...</td><td id="t-chess960-games">...</td><td><span class="tag">Variant ready</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="content-grid">
+      <article class="panel section">
+        <h2>Challenge Protocol</h2>
+        <div class="content-grid" style="grid-template-columns: 1fr; margin-top: 14px;">
+          <div class="mini-card">
+            <h3>Elite bots</h3>
+            <ul class="list">
+              <li>2300+ rating accepted in rated games.</li>
+              <li>Standard and Chess960 are supported.</li>
+              <li>Time controls from bullet to classical are allowed.</li>
+            </ul>
+          </div>
+          <div class="mini-card">
+            <h3>Protection rules</h3>
+            <ul class="list">
+              <li>Low-rated bots are routed to safer casual games.</li>
+              <li>Opponent repeat limits protect rating and variety.</li>
+              <li>Matchmaking can enter protection mode after rating drops.</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <article class="panel section">
+        <h2>Core Capabilities</h2>
+        <div class="content-grid" style="grid-template-columns: 1fr; margin-top: 14px;">
+          <div class="mini-card">
+            <h3>Engine stack</h3>
+            <ul class="list">
+              <li>Ethereal-based UCI engine pipeline.</li>
+              <li>NNUE evaluation with opening book support.</li>
+              <li>Safer time management for increment games.</li>
+            </ul>
+          </div>
+          <div class="mini-card">
+            <h3>Operations</h3>
+            <ul class="list">
+              <li>Auto-abort for inactive opponents.</li>
+              <li>Fallback move selection if the engine fails.</li>
+              <li>Optional chat and post-game messaging.</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <footer>
+      Oxydan 11 dashboard. Live data comes from the public Lichess API.
+    </footer>
+  </main>
+
+  <script>
+    const BOT_LICHESS_USERNAME = "OxydanBot";
+    const PERF_KEYS = ["bullet", "blitz", "rapid", "classical", "chess960"];
+
+    const fallbackStats = {
+      bullet: { rating: 2806, games: 0 },
+      blitz: { rating: 2747, games: 0 },
+      rapid: { rating: 2709, games: 0 },
+      classical: { rating: 2709, games: 0 },
+      chess960: { rating: 2091, games: 0 }
+    };
+
+    function byId(id) {
+      return document.getElementById(id);
+    }
+
+    function formatRating(perf) {
+      if (!perf || !perf.rating) return "...";
+      return `${perf.rating}${perf.prov ? "?" : ""}`;
+    }
+
+    function updatePerf(key, perf) {
+      const rating = formatRating(perf);
+      const games = perf && Number.isFinite(perf.games) ? perf.games : 0;
+      byId(`${key}-val`).textContent = rating;
+      byId(`t-${key}-val`).textContent = rating;
+      byId(`${key}-games`).textContent = `${games} games`;
+      byId(`t-${key}-games`).textContent = games;
+    }
+
+    function setApiState(state, message) {
+      const dot = byId("api-dot");
+      dot.className = state === "ok" ? "dot ok" : state === "bad" ? "dot bad" : "dot";
+      byId("api-status").textContent = message;
+    }
+
+    function updatePeak(perfs) {
+      const values = PERF_KEYS
+        .map((key) => perfs[key] && perfs[key].rating)
+        .filter((rating) => Number.isFinite(rating));
+      const peak = values.length ? Math.max(...values) : 0;
+      byId("peak-pill").textContent = peak ? `Peak: ${peak}` : "Peak: unavailable";
+    }
+
+    function updateLastSync() {
+      const now = new Date();
+      byId("last-sync").textContent = `Last sync: ${now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    }
+
+    function renderBoard() {
+      const board = byId("visual-board");
+      const pieces = {
+        "0,0": "r", "0,1": "n", "0,2": "b", "0,3": "q", "0,4": "k", "0,5": "b", "0,6": "n", "0,7": "r",
+        "1,0": "p", "1,1": "p", "1,2": "p", "1,3": "p", "1,4": "p", "1,5": "p", "1,6": "p", "1,7": "p",
+        "6,0": "P", "6,1": "P", "6,2": "P", "6,3": "P", "6,4": "P", "6,5": "P", "6,6": "P", "6,7": "P",
+        "7,0": "R", "7,1": "N", "7,2": "B", "7,3": "Q", "7,4": "K", "7,5": "B", "7,6": "N", "7,7": "R"
+      };
+
+      board.innerHTML = "";
+      for (let row = 0; row < 8; row += 1) {
+        for (let col = 0; col < 8; col += 1) {
+          const square = document.createElement("div");
+          square.className = `sq ${(row + col) % 2 === 0 ? "light" : "dark"}`;
+          const piece = pieces[`${row},${col}`] || "";
+          square.textContent = piece;
+          if (piece) square.classList.add(piece === piece.toUpperCase() ? "blue-piece" : "gold-piece");
+          board.appendChild(square);
+        }
+      }
+    }
+
+    async function fetchLichessStats() {
+      const refreshButton = byId("refresh-btn");
+      refreshButton.disabled = true;
+      refreshButton.textContent = "Loading";
+      setApiState("wait", "Connecting to Lichess");
+
+      try {
+        const response = await fetch(`https://lichess.org/api/user/${BOT_LICHESS_USERNAME}`, {
+          headers: { Accept: "application/json" }
+        });
+        if (!response.ok) throw new Error(`Lichess returned ${response.status}`);
+
+        const data = await response.json();
+        const perfs = data.perfs || {};
+
+        PERF_KEYS.forEach((key) => updatePerf(key, perfs[key]));
+        updatePeak(perfs);
+        updateLastSync();
+        byId("profile-line").textContent = `${data.username || BOT_LICHESS_USERNAME} profile loaded from Lichess.`;
+        setApiState("ok", "Live data connected");
+      } catch (error) {
+        console.error("Lichess API error:", error);
+        PERF_KEYS.forEach((key) => updatePerf(key, fallbackStats[key]));
+        updatePeak(fallbackStats);
+        updateLastSync();
+        byId("profile-line").textContent = "Showing fallback values because live data could not be loaded.";
+        setApiState("bad", "Fallback data shown");
+      } finally {
+        refreshButton.disabled = false;
+        refreshButton.textContent = "Refresh";
+      }
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      renderBoard();
+      fetchLichessStats();
+      byId("refresh-btn").addEventListener("click", fetchLichessStats);
+    });
+  </script>
 </body>
 </html>

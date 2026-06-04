@@ -22,32 +22,31 @@ def run_diagnostic():
 
     try:
         # 3. Dinamik Olarak Modülü Yükle
-        # NOT: 'lichess-bot.py' dosyasının doğrudan çalışmasını engellemek için standardı taklit ediyoruz
         spec = importlib.util.spec_from_file_location("lichess_bot_module", main_script)
         lichess_bot_module = importlib.util.module_from_spec(spec)
-        
-        # Dosya import edilirken içindeki '__name__' değerini 'lichess_bot_module' yapıyoruz.
-        # Eğer lichess-bot.py dosyasında 'if __name__ == "__main__":' bloğu varsa, botun kendiliğinden başlamasını engeller.
         spec.loader.exec_module(lichess_bot_module)
         
-        # Sınıfı modülün içinden al ve doğru değişkene eşitle
         try:
-            # Buradaki ismi 'OxydanV11' yaptık ki aşağıdaki bot = OxydanV11(...) satırı hata vermesin
             OxydanV11 = getattr(lichess_bot_module, "OxydanV11")
         except AttributeError:
             print("❌ ERROR: 'OxydanV11' sınıfı lichess-bot.py içinde bulunamadı!")
-            print("💡 İpucu: lichess-bot.py içindeki sınıf adının tam olarak 'OxydanV11' olduğundan emin ol.")
             sys.exit(1)
             
         print("✅ Module loaded successfully.")
 
-        # 4. Motor Havuzu Başlatma Testi (Düşük Hash ile)
+        # 4. Motor Havuzu Başlatma Testi
         print("🤖 Initializing engine instance for testing...")
         bot = OxydanV11(exe_path, uci_options={"Hash": 16, "Threads": 1})
         board = chess.Board()
         
         # 5. Hamle Üretme Testi
         print("♟️ Testing pool-based engine move generation...")
+        
+        # 🛑 KRİTİK DÜZELTME: Fallback mekanizmasını test için devre dışı bırakıyoruz!
+        # Eğer motor hata verir veya kilitlenirse, python yedek hamle üreticisi devreye giremeyecek, 
+        # test doğrudan None alacak ve başarısız (fail) sayılacaktır.
+        bot.fallback_move = lambda b: None
+        
         move = bot.get_best_move(board, 10000, 10000, 1000, 1000)
         
         if move and move in board.legal_moves:
@@ -55,9 +54,7 @@ def run_diagnostic():
             
             # --- HAVUZU GÜVENLİ BOŞALTMA ---
             print("🧹 Cleaning up engine pool processes...")
-            
             closed_engines = 0
-            # bot.engine_pool'un varlığını ve boş olmadığını kontrol et
             if hasattr(bot, 'engine_pool') and bot.engine_pool is not None:
                 while not bot.engine_pool.empty():
                     try:
@@ -70,7 +67,6 @@ def run_diagnostic():
                         if hasattr(bot.engine_pool, 'task_done'):
                             bot.engine_pool.task_done()
             else:
-                # Eğer havuz yapısı yoksa veya direkt engine nesnesiyse
                 try:
                     bot.quit()
                     closed_engines += 1
@@ -80,11 +76,10 @@ def run_diagnostic():
             time.sleep(1) 
             print(f"✅ {closed_engines} motor başarıyla kapatıldı ve süreçler temizlendi.")
             print("✅ Diagnostics passed. Ready for deployment.")
-            
-            # Başarılı çıkış
             os._exit(0) 
         else:
-            print("❌ ERROR: Engine failed to produce a valid move!")
+            # 🚨 Motor çöktüğünde veya fallback devreye girmek zorunda kaldığında artık buraya düşecek:
+            print("❌ ERROR: Engine FAILED to produce a valid move! Fallback mechanism was bypassed.")
             sys.exit(1)
 
     except Exception as e:

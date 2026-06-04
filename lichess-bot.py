@@ -325,42 +325,53 @@ class OxydanV11:
             engine = self.engine_pool.get(timeout=5)
             buffer = SETTINGS.get("LATENCY_BUFFER", 0.07)
 
-            # Ethereal'a göndereceğimiz saatleri ping koruması için kırpıyoruz
-            white_clock = max(0.01, self.to_seconds(wtime) - buffer)
-            black_clock = max(0.01, self.to_seconds(btime) - buffer)
-            white_inc   = self.to_seconds(winc)
-            black_inc   = self.to_seconds(binc)
+            # Hamle sırasına göre aktif ve pasif oyuncunun sürelerini ayırıyoruz
+            if board.turn == chess.WHITE:
+                my_raw_time, op_raw_time = wtime, btime
+                my_raw_inc, op_raw_inc = winc, binc
+            else:
+                my_raw_time, op_raw_time = btime, wtime
+                my_raw_inc, op_raw_inc = binc, winc
+
+            # Saniyelere dönüştürme ve ping koruması (buffer) uygulaması
+            my_seconds = max(0.01, self.to_seconds(my_raw_time) - buffer)
+            op_seconds = max(0.01, self.to_seconds(op_raw_time) - buffer)
+            my_inc_seconds = self.to_seconds(my_raw_inc)
+            op_inc_seconds = self.to_seconds(op_raw_inc)
 
             # =================================================================
-            # ⚡ ULTRA PANİK MODU: SON 10 SANİYE (HYPER-BULLET)
+            # ⚡ AKILLI CLOCK MANİPÜLASYONU (KADEMELİ SÜRE YÖNETİMİ)
             # =================================================================
-            if my_time < 10.0:
-                if my_inc > 0:
-                    # Artırmalı oyundaysak artırma süresinin sadece %15'ini harca ki süre biriksin!
-                    think_limit = max(0.05, my_inc * 0.15)
-                else:
-                    # Artırmasız oyunda (Sudden Death) 0.15 saniye fırlat, süre çok kritikse premove hızı
-                    think_limit = 0.15 if my_time > 2.0 else 0.05
-                
-                # Sert 'time' kısıtlaması dayatarak motoru ultra hızlı oynamaya zorluyoruz
-                limit = chess.engine.Limit(
-                    time=think_limit,
-                    white_clock=white_clock,
-                    black_clock=black_clock,
-                    white_inc=white_inc,
-                    black_inc=black_inc,
-                )
-            # =================================================================
-            # 🧠 STANDART MOD: KONTROLÜ ETHEREAL'IN DAHİLİ ZEKASINA BIRAK
-            # =================================================================
+            if my_seconds < 10.0:
+                # 🛑 1. ULTRA PANİK: Artırmayı gizle, saati çok az göster.
+                # min(my_seconds, ...) ekleyerek botun elindeki gerçek süreden 
+                # daha büyük bir yalan söylemesini kesinlikle engelliyoruz!
+                panic_time = my_inc_seconds * 0.3 if my_inc_seconds > 0 else 0.20
+                my_send_time = max(0.02, min(my_seconds * 0.5, panic_time))
+                my_send_inc = 0.0
+            elif my_seconds < 25.0:
+                # ⚠️ 2. GÜVENLİ GEÇİŞ BÖLGESİ: Derin düşünmeyi engelle, süre biriktir.
+                my_send_time = my_seconds
+                my_send_inc = my_inc_seconds * 0.3
             else:
-                # 'time' parametresi göndermeyerek Ethereal'ın Soft/Hard Bound, EasyMove
-                # ve taktik derinleşme mekanizmalarını tamamen serbest bırakıyoruz.
+                # 🧠 3. STANDART MOD: Süre sağlıklı, Ethereal özgür.
+                my_send_time = my_seconds
+                my_send_inc = my_inc_seconds
+
+            # Renklere göre limit nesnesini dinamik olarak dolduruyoruz
+            if board.turn == chess.WHITE:
                 limit = chess.engine.Limit(
-                    white_clock=white_clock,
-                    black_clock=black_clock,
-                    white_inc=white_inc,
-                    black_inc=black_inc,
+                    white_clock=my_send_time,
+                    black_clock=op_seconds,
+                    white_inc=my_send_inc,
+                    black_inc=op_inc_seconds,
+                )
+            else:
+                limit = chess.engine.Limit(
+                    white_clock=op_seconds,
+                    black_clock=my_send_time,
+                    white_inc=op_inc_seconds,
+                    black_inc=my_send_inc,
                 )
             
             result = engine.play(board, limit)

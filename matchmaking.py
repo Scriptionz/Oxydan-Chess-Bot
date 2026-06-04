@@ -18,6 +18,7 @@ SETTINGS = {
     # DÜZELTME 1: 300 → 600 (5dk → 10dk) — çok sık tarama 429 riskini artırır
     "POOL_REFRESH_SECONDS":  600,
     "BLACKLIST_MINUTES":     60,
+    "FAILED_CHALLENGE_BLACKLIST_MINUTES": 10,
     "CHESS960_CHANCE":       0.10,
 
     # Turnuva
@@ -51,6 +52,7 @@ SETTINGS = {
     "RATING_DROP_THRESHOLD":  50,
     "PROTECTION_GAME_COUNT":  10,
     "MAX_GAMES_PER_OPPONENT": 3,
+    "OPPONENT_HISTORY_SECONDS": 3600,
 
     # Kalıcı kara liste (küçük harf)
     "PERMANENT_BLACKLIST": {
@@ -139,12 +141,13 @@ class RatingTracker:
 
 
 class Matchmaker:
-    def __init__(self, client, config, active_games, token):
+    def __init__(self, client, config, active_games, token, active_games_lock=None):
         self.client            = client
         self.raw_config        = config
         self.config            = config.get("matchmaking", {})
         self.enabled           = self.config.get("allow_feed", True)
         self.active_games      = active_games
+        self.active_games_lock = active_games_lock
         self.my_id             = None
         self.bot_pool          = []
         self.blacklist         = {}
@@ -159,11 +162,18 @@ class Matchmaker:
         self.last_cleanup           = 0
         self.token             = token
         self.cleanup_lock      = threading.Lock()
+        self.opponent_lock     = threading.Lock()
 
         self._apply_config_overrides()
         self.rating_tracker = RatingTracker(self.client)
         self.rating_tracker.initialize_baselines()
         self._initialize_id()
+
+    def _active_game_count(self):
+        if self.active_games_lock:
+            with self.active_games_lock:
+                return len(self.active_games)
+        return len(self.active_games)
 
     def _apply_config_overrides(self):
         """YAML ayarlarını global SETTINGS'e enjekte eder."""
@@ -173,6 +183,14 @@ class Matchmaker:
             SETTINGS["MAX_PARALLEL_GAMES"] = self.config["max_games"]
         if "chess960_chance" in self.config:
             SETTINGS["CHESS960_CHANCE"] = self.config["chess960_chance"]
+        for key in (
+            "rated_mode", "safety_lock_time", "pool_refresh_seconds",
+            "blacklist_minutes", "failed_challenge_blacklist_minutes",
+            "max_games_per_opponent", "opponent_history_seconds",
+            "auto_tournament", "tournament_cooldown",
+        ):
+            if key in self.config:
+                SETTINGS[key.upper()] = self.config[key]
         if "permanent_blacklist" in self.config:
             yaml_bl = {b.lower() for b in self.config["permanent_blacklist"]}
             SETTINGS["PERMANENT_BLACKLIST"].update(yaml_bl)
@@ -187,7 +205,7 @@ class Matchmaker:
 
     def _is_stop_triggered(self):
         if os.path.exists(SETTINGS["STOP_FILE"]):
-            if len(self.active_games) == 0:
+            if self._active_game_count() == 0:
                 print("🏁 [Matchmaker] Sistem kapatılıyor.")
                 os._exit(0)
             return True
@@ -315,8 +333,9 @@ class Matchmaker:
                 print("🧹 [Cleanup] Turnuva hafızası budandı.")
 
             # Opponent tracker tamamen sıfırla (1 saatlik periyot geçti)
-            old_count = len(self.opponent_tracker)
-            self.opponent_tracker.clear()
+            with self.opponent_lock:
+                old_count = len(self.opponent_tracker)
+                self.opponent_tracker.clear()
             print(f"🧹 [Cleanup] opponent_tracker sıfırlandı ({old_count} kayıt temizlendi).")
 
     # ==========================================================
@@ -352,7 +371,11 @@ class Matchmaker:
 
         # DÜZELTME 3: Sadece kontrol — artırma yok.
         # Sayacı record_game_result artırır (tamamlanan oyun bazlı).
-        if self.opponent_tracker.get(user_id, 0) >= SETTINGS["MAX_GAMES_PER_OPPONENT"]:
+        opponent_key = user_id.lower()
+        with self.opponent_lock:
+            games_with_user = self.opponent_tracker.get(opponent_key, 0)
+
+        if games_with_user >= SETTINGS["MAX_GAMES_PER_OPPONENT"]:
             return False, f"Max {SETTINGS['MAX_GAMES_PER_OPPONENT']} games reached with {user_id}."
 
         # İNSAN
@@ -447,9 +470,9 @@ class Matchmaker:
         # Blacklist ve max oyun filtresi uygulanmış adaylar
         candidates = [
             b for b in self.bot_pool
-            if b not in self.blacklist or self.blacklist[b] <= now
+            if b.lower() not in self.blacklist or self.blacklist[b.lower()] <= now
             # DÜZELTME 3: Sayaç kontrolü burada — ama artırma yok
-            and self.opponent_tracker.get(b, 0) < SETTINGS["MAX_GAMES_PER_OPPONENT"]
+            and self.opponent_tracker.get(b.lower(), 0) < SETTINGS["MAX_GAMES_PER_OPPONENT"]
         ][:50]
 
         if not candidates:
@@ -498,9 +521,11 @@ class Matchmaker:
 
         # Tamamlanan oyun sayacını artır
         if opponent_id:
-            self.opponent_tracker[opponent_id] = (
-                self.opponent_tracker.get(opponent_id, 0) + 1
-            )
+            opponent_key = opponent_id.lower()
+            with self.opponent_lock:
+                self.opponent_tracker[opponent_key] = (
+                    self.opponent_tracker.get(opponent_key, 0) + 1
+                )
 
     # ==========================================================
     # 🚀 ANA DÖNGÜ
@@ -518,7 +543,7 @@ class Matchmaker:
         while True:
             try:
                 # Saatte bir cleanup
-                if time.time() - self.last_cleanup > 3600:
+                if time.time() - self.last_cleanup > SETTINGS["OPPONENT_HISTORY_SECONDS"]:
                     self._cleanup_history()
                     self.last_cleanup = time.time()
 
@@ -528,7 +553,7 @@ class Matchmaker:
                     time.sleep(60)
                     continue
 
-                if len(self.active_games) < SETTINGS["MAX_PARALLEL_GAMES"]:
+                if self._active_game_count() < SETTINGS["MAX_PARALLEL_GAMES"]:
                     target, rating, limit_sn, inc_sn, is_rated, tier_name = \
                         self._find_suitable_target()
 
@@ -538,7 +563,8 @@ class Matchmaker:
                         mins      = limit_sn // 60
                         secs      = limit_sn % 60
                         tc_label  = f"{mins}:{secs:02d}+{inc_sn}" if secs else f"{mins}+{inc_sn}"
-                        played    = self.opponent_tracker.get(target, 0)
+                        with self.opponent_lock:
+                            played = self.opponent_tracker.get(target.lower(), 0)
 
                         print(
                             f"[{tier_name}] → {target} ({rating}) | "
@@ -546,16 +572,24 @@ class Matchmaker:
                             f"Oyun {played}/{SETTINGS['MAX_GAMES_PER_OPPONENT']}"
                         )
 
-                        self.blacklist[target] = datetime.now() + timedelta(
+                        target_key = target.lower()
+                        self.blacklist[target_key] = datetime.now() + timedelta(
                             minutes=SETTINGS["BLACKLIST_MINUTES"]
                         )
-                        self.client.challenges.create(
-                            username=target,
-                            rated=is_rated,
-                            variant=variant,
-                            clock_limit=limit_sn,
-                            clock_increment=inc_sn
-                        )
+                        try:
+                            self.client.challenges.create(
+                                username=target,
+                                rated=is_rated,
+                                variant=variant,
+                                clock_limit=limit_sn,
+                                clock_increment=inc_sn
+                            )
+                            self.wait_timeout = 120
+                        except Exception:
+                            self.blacklist[target_key] = datetime.now() + timedelta(
+                                minutes=SETTINGS["FAILED_CHALLENGE_BLACKLIST_MINUTES"]
+                            )
+                            raise
                         time.sleep(SETTINGS["SAFETY_LOCK_TIME"])
                     else:
                         time.sleep(10)

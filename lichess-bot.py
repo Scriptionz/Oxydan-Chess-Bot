@@ -17,9 +17,9 @@ from matchmaking import Matchmaker, SETTINGS as MM_SETTINGS
 # ⚙️ AYARLAR
 # ==========================================================
 SETTINGS = {
-    "TOKEN":                      os.environ.get('LICHESS_TOKEN'),
-    "ENGINE_PATH":                "./src/Ethereal",
-    "BOOK_PATH":                  "./book.bin",
+    "TOKEN":                 os.environ.get('LICHESS_TOKEN'),
+    "ENGINE_PATH":           "./src/Ethereal",
+    "BOOK_PATH":             "./book.bin",
 
     "MAX_PARALLEL_GAMES":         2,
     "MAX_TOTAL_RUNTIME":          21600,   # 6 saat
@@ -27,7 +27,7 @@ SETTINGS = {
     "MIN_GAME_SECONDS_REMAINING": 300,     # 5 dk güvenlik payı
     "MIN_TIME_TO_DECLINE":        600,     # 10 dk buffer
 
-    "LATENCY_BUFFER":             0.07,
+    "LATENCY_BUFFER":             0.07,    # Lichess ağ gecikmesi emniyet payı (70ms)
     "TABLEBASE_PIECE_LIMIT":      7,
     "ONLINE_TABLEBASE_ENABLED":   True,
     "MIN_TIME_FOR_TABLEBASE":     12.0,
@@ -128,10 +128,6 @@ def active_discard(active_games, active_games_lock, game_id):
 
 
 def runtime_watchdog(start_time, active_games, active_games_lock):
-    """
-    Arka planda çalışır. MAX_TOTAL_RUNTIME aşılınca
-    aktif oyun yoksa sistemi kapatır, varsa bekler.
-    """
     while True:
         time.sleep(30)
         elapsed = time.time() - start_time
@@ -189,7 +185,6 @@ class OxydanV11:
         try:
             for _ in range(pool_size):
                 eng = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=30)
-                # "Move Overhead" boşluklu yazım zorunlu — MoveOverhead çalışmaz
                 try:
                     eng.configure({"Move Overhead": config_overhead})
                 except Exception:
@@ -235,52 +230,6 @@ class OxydanV11:
             return max(0.0, float(t) / 1000.0)
         except (TypeError, ValueError):
             return 0.0
-
-    def calculate_smart_time(self, t, inc, board):
-        buffer      = SETTINGS.get("LATENCY_BUFFER", 0.07)
-        move_count = len(board.move_stack)
-        legal_moves = len(list(board.legal_moves))
-
-        if t < 0.3:
-            return 0.001                                            # Pmove hızı
-
-        if t < 0.8:
-            return t * 0.05                                         # ~%5, max ~40ms
-
-        if t < 2.0:
-            return max(0.01, (t * 0.06) + (inc * 0.98) - buffer)   # 2sn altı
-
-        if t < 3.0:
-            return max(0.02, (t * 0.08) + (inc * 1.00) - buffer)   # 3sn altı
-
-        if t < 5.0:
-            return max(0.03, (t * 0.10) + (inc * 0.90) - buffer)   # 5sn altı
-
-        if t < 10.0:
-            return max(0.05, (t * 0.12) + (inc * 0.80) - buffer)   # 10sn altı
-
-        # ── NORMAL HESAPLAMA (10sn+) ───────────────────────────────────────────
-        if t < 30.0:
-            complexity = max(0.5, min(legal_moves / 25.0, 2.5))
-            think      = ((t * 0.18) + (inc * 0.80)) * complexity
-            return max(0.05, min(think, t * 0.5) - buffer)
-
-        # Rapid/Classical (30sn+)
-        if move_count < 15:    divisor = 40
-        elif move_count < 40:   divisor = 25
-        elif move_count < 60:   divisor = 15
-        else:                   divisor = 8    # Oyun sonu: daha çok düşün
-
-        base_time  = t / divisor
-        final_time = base_time + (inc * 0.6)
-        complexity = min(legal_moves / 20.0, 2.0)
-        final_time *= complexity
-
-        if move_count >= 60:    max_frac = 0.20
-        elif move_count >= 40:  max_frac = 0.15
-        else:                   max_frac = 0.12
-
-        return max(0.15, min(final_time, t * max_frac, 20.0) - buffer)
 
     def fallback_move(self, board):
         legal = list(board.legal_moves)
@@ -329,7 +278,7 @@ class OxydanV11:
         my_time = self.to_seconds(wtime if board.turn == chess.WHITE else btime)
         my_inc  = self.to_seconds(winc  if board.turn == chess.WHITE else binc)
 
-        # 1. KİTAP
+        # 1. KİTAP DETEKSİYONU
         if not board.chess960 and os.path.exists(self.book_path):
             try:
                 with chess.polyglot.open_reader(self.book_path) as reader:
@@ -350,7 +299,7 @@ class OxydanV11:
             except Exception as e:
                 print(f"📖 Kitap Hatası: {e}")
 
-        # 2. TABLEBASE
+        # 2. TABLEBASE DETEKSİYONU
         if (SETTINGS.get("ONLINE_TABLEBASE_ENABLED", True)
                 and my_time >= SETTINGS.get("MIN_TIME_FOR_TABLEBASE", 12.0)
                 and not board.chess960
@@ -370,27 +319,50 @@ class OxydanV11:
             except:
                 pass
 
-        # 3. MOTOR
+        # 3. 🚀 YENİLENEN MOTOR VE ZAMAN YÖNETİMİ
         engine = None
         try:
             engine = self.engine_pool.get(timeout=5)
-            think   = self.calculate_smart_time(my_time, my_inc, board)
+            buffer = SETTINGS.get("LATENCY_BUFFER", 0.07)
 
-            white_clock = self.to_seconds(wtime)
-            black_clock = self.to_seconds(btime)
+            # Ethereal'a göndereceğimiz saatleri ping koruması için kırpıyoruz
+            white_clock = max(0.01, self.to_seconds(wtime) - buffer)
+            black_clock = max(0.01, self.to_seconds(btime) - buffer)
             white_inc   = self.to_seconds(winc)
             black_inc   = self.to_seconds(binc)
 
-            limit = chess.engine.Limit(
-                time=think,
-                white_clock=white_clock,
-                black_clock=black_clock,
-                white_inc=white_inc,
-                black_inc=black_inc,
-            )
+            # =================================================================
+            # ⚡ ULTRA PANİK MODU: SON 10 SANİYE (HYPER-BULLET)
+            # =================================================================
+            if my_time < 10.0:
+                if my_inc > 0:
+                    # Artırmalı oyundaysak artırma süresinin sadece %15'ini harca ki süre biriksin!
+                    think_limit = max(0.05, my_inc * 0.15)
+                else:
+                    # Artırmasız oyunda (Sudden Death) 0.15 saniye fırlat, süre çok kritikse premove hızı
+                    think_limit = 0.15 if my_time > 2.0 else 0.05
+                
+                # Sert 'time' kısıtlaması dayatarak motoru ultra hızlı oynamaya zorluyoruz
+                limit = chess.engine.Limit(
+                    time=think_limit,
+                    white_clock=white_clock,
+                    black_clock=black_clock,
+                    white_inc=white_inc,
+                    black_inc=black_inc,
+                )
+            # =================================================================
+            # 🧠 STANDART MOD: KONTROLÜ ETHEREAL'IN DAHİLİ ZEKASINA BIRAK
+            # =================================================================
+            else:
+                # 'time' parametresi göndermeyerek Ethereal'ın Soft/Hard Bound, EasyMove
+                # ve taktik derinleşme mekanizmalarını tamamen serbest bırakıyoruz.
+                limit = chess.engine.Limit(
+                    white_clock=white_clock,
+                    black_clock=black_clock,
+                    white_inc=white_inc,
+                    black_inc=black_inc,
+                )
             
-            # ✅ DÜZELTİLDİ: TypeError veren 'timeout=think + 0.5' parametresi kaldırıldı.
-            # python-chess kütüphanesinde zaman sınırı zaten yukarıdaki 'limit' nesnesi üzerinden motora iletilir.
             result = engine.play(board, limit)
             
             if result.move and result.move in board.legal_moves:
@@ -411,7 +383,7 @@ class OxydanV11:
         return self.fallback_move(board)
 
 # ==========================================================
-# 🎮 OYUN YÖNETİMİ
+# 🎮 OYUN YÖNETİMİ VE DİĞER FONKSİYONLAR (DEĞİŞMEDİ)
 # ==========================================================
 
 def _get_game_mode(time_control):
@@ -600,10 +572,6 @@ def handle_game_wrapper(game_id, bot, my_id, active_games, active_games_lock, mm
     finally:
         active_discard(active_games, active_games_lock, game_id)
 
-
-# ==========================================================
-# 🚀 ANA DÖNGÜ
-# ==========================================================
 
 def main():
     start_time = time.time()

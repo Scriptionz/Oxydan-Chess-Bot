@@ -15,7 +15,6 @@ SETTINGS = {
     "MAX_PARALLEL_GAMES":    2,
     "SAFETY_LOCK_TIME":      45,
     "STOP_FILE":             "STOP.txt",
-    # DÜZELTME 1: 300 → 600 (5dk → 10dk) — çok sık tarama 429 riskini artırır
     "POOL_REFRESH_SECONDS":  600,
     "BLACKLIST_MINUTES":     60,
     "FAILED_CHALLENGE_BLACKLIST_MINUTES": 10,
@@ -25,7 +24,6 @@ SETTINGS = {
     "AUTO_TOURNAMENT":       True,
     "JOIN_UPCOMING_MINS":    15,
     "ONLY_BOT_TOURNEYS":     True,
-    # DÜZELTME 2: 180 → 600 (3dk → 10dk) — çok sık turnuva sorgusu 429 riskini artırır
     "TOURNAMENT_COOLDOWN":   600,
 
     # Zaman kontrolleri (saniye)
@@ -77,6 +75,7 @@ def _parse_tc(tc_str):
 class RatingTracker:
     def __init__(self, client=None):
         self.client = client
+        self.lock = threading.Lock()  # ✅ GÜNCELLEME: Thread güvenliği için kilit eklendi
         self.baseline = {
             'bullet': 2931, 'blitz': 2889,
             'rapid':  2925, 'classical': 2773, 'chess960': 2021,
@@ -92,42 +91,44 @@ class RatingTracker:
             try:
                 data  = self.client.account.get()
                 perfs = data.get('perfs', {})
-                for mode in self.baseline:
-                    if mode in perfs and 'rating' in perfs[mode]:
-                        self.baseline[mode] = perfs[mode]['rating']
-                self.current = dict(self.baseline)
+                with self.lock:
+                    for mode in self.baseline:
+                        if mode in perfs and 'rating' in perfs[mode]:
+                            self.baseline[mode] = perfs[mode]['rating']
+                    self.current = dict(self.baseline)
                 print(f"📊 [RatingTracker] Baseline yüklendi: {self.current}")
             except Exception as e:
                 print(f"⚠️ [RatingTracker] Baseline alınamadı, varsayılanlar aktif: {e}")
 
     def record_result(self, result, mode, new_rating=None):
-        was_in_protection = self.in_protection
+        with self.lock:  # ✅ GÜNCELLEME: Çoklu oyun bitişlerinde yarış durumları engellendi
+            was_in_protection = self.in_protection
 
-        # Puan düşüşü kontrolü
-        if new_rating and mode in self.current:
-            old  = self.current[mode]
-            self.current[mode] = new_rating
-            drop = old - new_rating
-            if drop >= SETTINGS["RATING_DROP_THRESHOLD"]:
-                self._activate_protection(
-                    f"{mode.capitalize()} puanı {drop} puan düştü ({old}→{new_rating})"
-                )
+            # Puan düşüşü kontrolü
+            if new_rating and mode in self.current:
+                old  = self.current[mode]
+                self.current[mode] = new_rating
+                drop = old - new_rating
+                if drop >= SETTINGS["RATING_DROP_THRESHOLD"]:
+                    self._activate_protection(
+                        f"{mode.capitalize()} puanı {drop} puan düştü ({old}→{new_rating})"
+                    )
 
-        # Seri kontrolü
-        if result == 'loss':
-            self.losing_streak += 1
-            if self.losing_streak >= SETTINGS["LOSING_STREAK_LIMIT"]:
-                self._activate_protection(f"{self.losing_streak} üst üste kayıp")
-        else:
-            self.losing_streak = 0
-
-        # Geri sayım sadece koruma altındayken oynanan maçlar için
-        if was_in_protection:
-            self.protection_games -= 1
-            if self.protection_games <= 0:
-                self.in_protection = False
+            # Seri kontrolü
+            if result == 'loss':
+                self.losing_streak += 1
+                if self.losing_streak >= SETTINGS["LOSING_STREAK_LIMIT"]:
+                    self._activate_protection(f"{self.losing_streak} üst üste kayıp")
+            else:
                 self.losing_streak = 0
-                print("✅ [Koruma] Koruma modu sona erdi, normal dağılıma dönülüyor.")
+
+            # Geri sayım sadece koruma altındayken oynanan maçlar için
+            if was_in_protection:
+                self.protection_games -= 1
+                if self.protection_games <= 0:
+                    self.in_protection = False
+                    self.losing_streak = 0
+                    print("✅ [Koruma] Koruma modu sona erdi, normal dağılıma dönülüyor.")
 
     def _activate_protection(self, reason):
         if not self.in_protection:
@@ -137,7 +138,8 @@ class RatingTracker:
         self.protection_games = SETTINGS["PROTECTION_GAME_COUNT"]
 
     def is_in_protection(self):
-        return self.in_protection
+        with self.lock:
+            return self.in_protection
 
 
 class Matchmaker:
@@ -151,9 +153,6 @@ class Matchmaker:
         self.my_id             = None
         self.bot_pool          = []
         self.blacklist         = {}
-        # DÜZELTME 3: opponent_tracker YALNIZCA tamamlanan oyunları sayar.
-        # is_challenge_acceptable ve _find_suitable_target artırmaz;
-        # record_game_result artırır. Böylece çift sayım önlenir.
         self.opponent_tracker  = {}
         self.last_pool_update  = 0
         self.wait_timeout      = 120
@@ -235,10 +234,12 @@ class Matchmaker:
                 "https://lichess.org/api/tournament",
                 headers=self._auth_headers(), timeout=10
             )
+            if r.status_code == 429: raise Exception("HTTP 429")
             if r.status_code == 200:
                 data = r.json()
                 return data.get('created', []) + data.get('started', [])
         except Exception as e:
+            if "429" in str(e): raise
             print(f"⚠️ [Arena] Liste çekilemedi: {e}")
         return []
 
@@ -252,12 +253,14 @@ class Matchmaker:
                     headers=self._auth_headers(),
                     params={"status": "created"}, timeout=10
                 )
+                if r.status_code == 429: raise Exception("HTTP 429")
                 if r.status_code == 200:
                     for line in r.text.strip().split('\n'):
                         if line:
                             try: swiss_list.append(json.loads(line))
                             except: pass
             except Exception as e:
+                if "429" in str(e): raise
                 print(f"⚠️ [Swiss] {team}: {e}")
         return swiss_list
 
@@ -267,8 +270,10 @@ class Matchmaker:
                 f"https://lichess.org/api/tournament/{tid}/join",
                 headers=self._auth_headers(), timeout=10
             )
+            if r.status_code == 429: raise Exception("HTTP 429")
             return r.status_code == 200
         except Exception as e:
+            if "429" in str(e): raise
             print(f"⚠️ [Arena] Katılım hatası: {e}")
             return False
 
@@ -278,8 +283,10 @@ class Matchmaker:
                 f"https://lichess.org/api/swiss/{sid}/join",
                 headers=self._auth_headers(), timeout=10
             )
+            if r.status_code == 429: raise Exception("HTTP 429")
             return r.status_code == 200
         except Exception as e:
+            if "429" in str(e): raise
             print(f"⚠️ [Swiss] Katılım hatası: {e}")
             return False
 
@@ -318,21 +325,13 @@ class Matchmaker:
                 return
 
     def _cleanup_history(self):
-        """
-        DÜZELTME 4: opponent_tracker'ı TAM olarak sıfırla.
-        Eski kod 'count < 3 olanları sil' yapıyordu — bu yanlış:
-        sıfırlanan oyuncular limit aşımına rağmen tekrar oyun oynayabiliyordu.
-        1 saatlik periyotta sayaçların tamamen sıfırlanması doğru davranış.
-        """
         with self.cleanup_lock:
-            # Turnuva hafızası: son 250'yi tut
             if len(self.registered_tournaments) > 500:
                 self.registered_tournaments = set(
                     list(self.registered_tournaments)[-250:]
                 )
                 print("🧹 [Cleanup] Turnuva hafızası budandı.")
 
-            # Opponent tracker tamamen sıfırla (1 saatlik periyot geçti)
             with self.opponent_lock:
                 old_count = len(self.opponent_tracker)
                 self.opponent_tracker.clear()
@@ -369,8 +368,6 @@ class Matchmaker:
 
         limit_sn = tc.get('limit', 0)
 
-        # DÜZELTME 3: Sadece kontrol — artırma yok.
-        # Sayacı record_game_result artırır (tamamlanan oyun bazlı).
         opponent_key = user_id.lower()
         with self.opponent_lock:
             games_with_user = self.opponent_tracker.get(opponent_key, 0)
@@ -439,6 +436,7 @@ class Matchmaker:
                 self.last_pool_update = now
                 print(f"[Matchmaker] Bot havuzu: {len(self.bot_pool)} bot")
             except Exception as e:
+                if "429" in str(e): raise
                 print(f"⚠️ [Matchmaker] Havuz yenileme hatası: {e}")
                 time.sleep(10)
 
@@ -453,7 +451,6 @@ class Matchmaker:
             is_rated = False
         elif tier == SETTINGS["TIER_MID"]:
             tc_pool  = SETTINGS["TC_MAX_10"]
-            # Koruma modunda her zaman casual
             is_rated = False if self.rating_tracker.is_in_protection() else SETTINGS["RATED_MODE"]
         else:
             tc_pool  = SETTINGS["TC_ALL"]
@@ -465,20 +462,19 @@ class Matchmaker:
         if limit_sn < 180:    mode = 'bullet'
         elif limit_sn < 480:  mode = 'blitz'
         elif limit_sn < 1500: mode = 'rapid'
-        else:                  mode = 'classical'
+        else:                 mode = 'classical'
 
-        # Blacklist ve max oyun filtresi uygulanmış adaylar
-        candidates = [
-            b for b in self.bot_pool
-            if b.lower() not in self.blacklist or self.blacklist[b.lower()] <= now
-            # DÜZELTME 3: Sayaç kontrolü burada — ama artırma yok
-            and self.opponent_tracker.get(b.lower(), 0) < SETTINGS["MAX_GAMES_PER_OPPONENT"]
-        ][:50]
+        # ✅ GÜNCELLEME: opponent_tracker okuması kilit altına alındı
+        with self.opponent_lock:
+            candidates = [
+                b for b in self.bot_pool
+                if (b.lower() not in self.blacklist or self.blacklist[b.lower()] <= now)
+                and self.opponent_tracker.get(b.lower(), 0) < SETTINGS["MAX_GAMES_PER_OPPONENT"]
+            ][:50]
 
         if not candidates:
             return None, 0, 0, 0, False, tier_name
 
-        # Toplu kullanıcı verisi çek — POST /api/users (berserk'te get_by_ids yok)
         try:
             r = requests.post(
                 "https://lichess.org/api/users",
@@ -486,6 +482,8 @@ class Matchmaker:
                 data=",".join(candidates),
                 timeout=10
             )
+            if r.status_code == 429:
+                raise Exception("HTTP 429 Rate Limit")  # ✅ GÜNCELLEME: Ana döngünün yakalaması sağlandı
             if r.status_code == 200:
                 users_data = r.json()
                 random.shuffle(users_data)
@@ -497,6 +495,8 @@ class Matchmaker:
             else:
                 raise Exception(f"HTTP {r.status_code}")
         except Exception as e:
+            if "429" in str(e):
+                raise  # ✅ GÜNCELLEME: Rate limit bypass edilmiyor, üst metoda fırlatılıyor
             print(f"⚠️ [Matchmaker] Toplu çekme başarısız: {e} — tekli moda geçildi")
             for bot_id in candidates[:5]:
                 try:
@@ -505,21 +505,15 @@ class Matchmaker:
                     time.sleep(0.3)
                     if tier[0] <= rating <= tier[1]:
                         return bot_id, rating, limit_sn, inc_sn, is_rated, tier_name
-                except Exception:
+                except Exception as ex:
+                    if "429" in str(ex): raise
                     continue
 
         return None, 0, 0, 0, False, tier_name
 
     def record_game_result(self, result, mode, new_rating=None, opponent_id=None):
-        """
-        Oyun bittiğinde lichess-bot.py'den çağrılır.
-        DÜZELTME 5: opponent_id artık kullanılıyor — tamamlanan oyun sayılır.
-        result: 'win' | 'loss' | 'draw'
-        mode:   'bullet' | 'blitz' | 'rapid' | 'classical' | 'chess960'
-        """
         self.rating_tracker.record_result(result, mode, new_rating)
 
-        # Tamamlanan oyun sayacını artır
         if opponent_id:
             opponent_key = opponent_id.lower()
             with self.opponent_lock:
@@ -542,7 +536,6 @@ class Matchmaker:
 
         while True:
             try:
-                # Saatte bir cleanup
                 if time.time() - self.last_cleanup > SETTINGS["OPPONENT_HISTORY_SECONDS"]:
                     self._cleanup_history()
                     self.last_cleanup = time.time()
@@ -585,14 +578,16 @@ class Matchmaker:
                                 clock_increment=inc_sn
                             )
                             self.wait_timeout = 120
-                        except Exception:
+                        except Exception as ce:
+                            if "429" in str(ce): raise
                             self.blacklist[target_key] = datetime.now() + timedelta(
                                 minutes=SETTINGS["FAILED_CHALLENGE_BLACKLIST_MINUTES"]
                             )
                             raise
                         time.sleep(SETTINGS["SAFETY_LOCK_TIME"])
                     else:
-                        time.sleep(10)
+                        # ✅ GÜNCELLEME: Uygun bot bulunamazsa Lichess API'sini spamlamamak için süre artırıldı
+                        time.sleep(45)
                 else:
                     time.sleep(10)
 

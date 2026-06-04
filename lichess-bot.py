@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 import berserk
 import chess
@@ -14,7 +14,7 @@ from datetime import timedelta
 from matchmaking import Matchmaker, SETTINGS as MM_SETTINGS
 
 # ==========================================================
-# âš™ï¸ AYARLAR
+# ⚙️ AYARLAR
 # ==========================================================
 SETTINGS = {
     "TOKEN":                      os.environ.get('LICHESS_TOKEN'),
@@ -24,13 +24,13 @@ SETTINGS = {
     "MAX_PARALLEL_GAMES":         2,
     "MAX_TOTAL_RUNTIME":          21600,   # 6 saat
     "MAX_GAME_TIME_LIMIT":        1800,    # 30+0'a kadar
-    "MIN_GAME_SECONDS_REMAINING": 300,     # 5 dk gÃ¼venlik payÄ±
+    "MIN_GAME_SECONDS_REMAINING": 300,     # 5 dk güvenlik payı
     "MIN_TIME_TO_DECLINE":        600,     # 10 dk buffer
 
     "LATENCY_BUFFER":             0.07,
     "TABLEBASE_PIECE_LIMIT":      7,
-    "ONLINE_TABLEBASE_ENABLED":    True,
-    "MIN_TIME_FOR_TABLEBASE":      12.0,
+    "ONLINE_TABLEBASE_ENABLED":   True,
+    "MIN_TIME_FOR_TABLEBASE":     12.0,
     "ABORT_WAIT_SECONDS":         60,
     "LOSING_SCORE_THRESHOLD":     -300,
     "CHAT_ENABLED":               True,
@@ -39,48 +39,48 @@ SETTINGS = {
 }
 
 # ==========================================================
-# ğŸ’¬ MESAJ HAVUZLARI
+# 💬 MESAJ HAVUZLARI
 # ==========================================================
 MESSAGES = {
     "greeting_bot": [
-        "Hi! Oxydan 11 ready. Developed by Emir KaradaÄŸ. Good luck! â™Ÿï¸",
-        "Let's play! May the best engine win. Powered by Oxydan 11 ğŸ¤–",
-        "Oxydan 11 on the board! Good luck! âš¡",
-        "Hello! Bringing Oxydan 11's A-game today ğŸ˜¤â™Ÿï¸",
+        "Hi! Oxydan 11 ready. Developed by Emir Karadağ. Good luck! ♟️",
+        "Let's play! May the best engine win. Powered by Oxydan 11 🤖",
+        "Oxydan 11 on the board! Good luck! ⚡",
+        "Hello! Bringing Oxydan 11's A-game today 😤 ♟️",
     ],
     "greeting_human": [
-        "Hi! I'm Oxydan 11, a chess bot developed by Emir KaradaÄŸ. Good luck and have fun! ğŸ“â™Ÿï¸",
-        "Welcome! I'm Oxydan 11. Let's play! After the game, I can analyze moves with you ğŸ¤–",
-        "Hello! Oxydan 11 here, created by Emir KaradaÄŸ. Good luck! ğŸ“",
-        "Hi there! Let's play a great game. Proudly developed by Emir KaradaÄŸ! â™Ÿï¸",
+        "Hi! I'm Oxydan 11, a chess bot developed by Emir Karadağ. Good luck and have fun! 🎓 ♟️",
+        "Welcome! I'm Oxydan 11. Let's play! After the game, I can analyze moves with you 🤖",
+        "Hello! Oxydan 11 here, created by Emir Karadağ. Good luck! 🎓",
+        "Hi there! Let's play a great game. Proudly developed by Emir Karadağ! ♟️",
     ],
     "win": [
-        "Good game! Well played ğŸ¤",
-        "Thanks for the game! You put up a great fight â™Ÿï¸",
-        "GG! That was an interesting game ğŸ¯",
-        "Well played! Hope to play again soon ğŸ¤–",
+        "Good game! Well played 🤝",
+        "Thanks for the game! You put up a great fight ♟️",
+        "GG! That was an interesting game 🎯",
+        "Well played! Hope to play again soon 🤖",
     ],
     "loss": [
-        "Good game! You played well, congratulations ğŸ‰",
-        "Well deserved win! GG ğŸ¤",
-        "Excellent play! I'll have to do better next time ğŸ˜…",
-        "GG! You outplayed Oxydan 11 today ğŸ‘",
+        "Good game! You played well, congratulations 🎉",
+        "Well deserved win! GG 🤝",
+        "Excellent play! I'll have to do better next time 😅",
+        "GG! You outplayed Oxydan 11 today 👏",
     ],
     "draw": [
-        "Good game! A well-earned draw ğŸ¤",
-        "Balanced game! GG â™Ÿï¸",
-        "A draw! Both sides fought well ğŸ¯",
+        "Good game! A well-earned draw 🤝",
+        "Balanced game! GG ♟️",
+        "A draw! Both sides fought well 🎯",
     ],
     "losing_realization": [
-        "You're playing really well, I'm in trouble here! ğŸ˜…",
-        "Nice moves! I can see this is going to be tough ğŸ˜¬",
-        "Impressive! You've got a strong position ğŸ‘",
-        "I have to admit, you're outplaying me right now! ğŸ“",
+        "You're playing really well, I'm in trouble here! 😅",
+        "Nice moves! I can see this is going to be tough 😬",
+        "Impressive! You've got a strong position 👏",
+        "I have to admit, you're outplaying me right now! 🎓",
     ],
     "human_postgame": [
-        "GG! If you'd like to review any moves or have chess questions, feel free to ask! ğŸ“",
-        "Well played! I'm happy to discuss the game or give tips if you're interested ğŸ¤–â™Ÿï¸",
-        "Good game! Any questions about the moves? I'm here to help! ğŸ“",
+        "GG! If you'd like to review any moves or have chess questions, feel free to ask! 🎓",
+        "Well played! I'm happy to discuss the game or give tips if you're interested 🤖 ♟️",
+        "Good game! Any questions about the moves? I'm here to help! 🎓",
     ],
 }
 
@@ -126,13 +126,11 @@ def active_discard(active_games, active_games_lock, game_id):
     with active_games_lock:
         active_games.discard(game_id)
 
-# ==========================================================
-# âœ… DÃœZELTME 1: runtime_watchdog tanÄ±mlandÄ±
-# ==========================================================
+
 def runtime_watchdog(start_time, active_games, active_games_lock):
     """
-    Arka planda Ã§alÄ±ÅŸÄ±r. MAX_TOTAL_RUNTIME aÅŸÄ±lÄ±nca
-    aktif oyun yoksa sistemi kapatÄ±r, varsa bekler.
+    Arka planda çalışır. MAX_TOTAL_RUNTIME aşılınca
+    aktif oyun yoksa sistemi kapatır, varsa bekler.
     """
     while True:
         time.sleep(30)
@@ -140,14 +138,14 @@ def runtime_watchdog(start_time, active_games, active_games_lock):
         if elapsed > SETTINGS["MAX_TOTAL_RUNTIME"]:
             count = active_count(active_games, active_games_lock)
             if count == 0:
-                print("â° [Watchdog] Ã‡alÄ±ÅŸma sÃ¼resi doldu, sistem kapatÄ±lÄ±yor.", flush=True)
+                print("⏰ [Watchdog] Çalışma süresi doldu, sistem kapatılıyor.", flush=True)
                 os._exit(0)
             else:
-                print(f"â° [Watchdog] SÃ¼re doldu ama {count} aktif oyun var, bekleniyor...", flush=True)
+                print(f"⏰ [Watchdog] Süre doldu ama {count} aktif oyun var, bekleniyor...", flush=True)
 
 
 # ==========================================================
-# ğŸ§  AÃ‡ILIÅ TAKÄ°BÄ° (THREAD-SAFE)
+# 🧠 AÇILIŞ TAKİBİ (THREAD-SAFE)
 # ==========================================================
 class OpeningTracker:
     def __init__(self, memory_size=10):
@@ -173,7 +171,7 @@ class OpeningTracker:
 
 
 # ==========================================================
-# ğŸ§  MOTOR YÃ–NETÄ°MÄ°
+# 🧠 MOTOR YÖNETİMİ
 # ==========================================================
 class OxydanV11:
     def __init__(self, exe_path, uci_options=None):
@@ -183,7 +181,6 @@ class OxydanV11:
         self.opening_tracker = OpeningTracker(memory_size=10)
 
         pool_size = SETTINGS["MAX_PARALLEL_GAMES"] + 1
-        # config_overhead'i dÃ¶ngÃ¼ dÄ±ÅŸÄ±nda tanÄ±mla (son deÄŸer deÄŸil, ilk deÄŸer)
         config_overhead = 100
         if uci_options:
             config_overhead = uci_options.get("Move Overhead",
@@ -192,7 +189,7 @@ class OxydanV11:
         try:
             for _ in range(pool_size):
                 eng = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=30)
-                # "Move Overhead" boÅŸluklu yazÄ±m zorunlu â€” MoveOverhead Ã§alÄ±ÅŸmaz
+                # "Move Overhead" boşluklu yazım zorunlu — MoveOverhead çalışmaz
                 try:
                     eng.configure({"Move Overhead": config_overhead})
                 except Exception:
@@ -209,33 +206,27 @@ class OxydanV11:
                         except Exception:
                             pass
                 self.engine_pool.put(eng)
-            print(f"ğŸš€ {pool_size} Motor HazÄ±r. Move Overhead: {config_overhead}ms", flush=True)
+            print(f"🚀 {pool_size} Motor Hazır. Move Overhead: {config_overhead}ms", flush=True)
         except Exception as e:
-            print(f"KRÄ°TÄ°K HATA: {e}", flush=True)
+            print(f"KRİTİK HATA: {e}", flush=True)
             sys.exit(1)
 
     def get_score(self, board):
         engine = None
         try:
-            engine = self.engine_pool.get(timeout=1)
+            engine = self.engine_pool.get(timeout=5)
             info   = engine.analyse(board, chess.engine.Limit(depth=6, time=0.05))
             score  = info.get("score")
             if score:
                 return score.white().score(mate_score=10000)
         except Exception as e:
-            print(f"âš ï¸ Skor analizi hatasÄ±: {e}")
+            print(f"⚠️ Skor analizi hatası: {e}")
         finally:
             if engine:
                 self.engine_pool.put(engine)
         return None
 
     def to_seconds(self, t):
-        """
-        Lichess gameState clock fields (wtime/btime/winc/binc) are milliseconds.
-        The old val > 1000 heuristic was dangerous: at 1000 ms or below it
-        treated milliseconds as seconds, so the bot could think it had plenty
-        of time while actually flagging.
-        """
         if t is None:
             return 0.0
         if isinstance(t, timedelta):
@@ -246,42 +237,39 @@ class OxydanV11:
             return 0.0
 
     def calculate_smart_time(self, t, inc, board):
-        buffer     = SETTINGS.get("LATENCY_BUFFER", 0.07)
+        buffer      = SETTINGS.get("LATENCY_BUFFER", 0.07)
         move_count = len(board.move_stack)
         legal_moves = len(list(board.legal_moves))
 
-        # â”€â”€ âœ… DÃœZELTME 4: GranÃ¼ler panik basamaklarÄ± geri getirildi â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        # Eskiden sadece t<2 ve t<5 vardÄ± â€” bullet'ta flag yeniyordu.
-
         if t < 0.3:
-            return 0.001                                            # Premove hÄ±zÄ±
+            return 0.001                                            # Pmove hızı
 
         if t < 0.8:
             return t * 0.05                                         # ~%5, max ~40ms
 
         if t < 2.0:
-            return max(0.01, (t * 0.06) + (inc * 0.98) - buffer)   # 2sn altÄ±
+            return max(0.01, (t * 0.06) + (inc * 0.98) - buffer)   # 2sn altı
 
         if t < 3.0:
-            return max(0.02, (t * 0.08) + (inc * 1.00) - buffer)   # 3sn altÄ±
+            return max(0.02, (t * 0.08) + (inc * 1.00) - buffer)   # 3sn altı
 
         if t < 5.0:
-            return max(0.03, (t * 0.10) + (inc * 0.90) - buffer)   # 5sn altÄ±
+            return max(0.03, (t * 0.10) + (inc * 0.90) - buffer)   # 5sn altı
 
         if t < 10.0:
-            return max(0.05, (t * 0.12) + (inc * 0.80) - buffer)   # 10sn altÄ±
+            return max(0.05, (t * 0.12) + (inc * 0.80) - buffer)   # 10sn altı
 
-        # â”€â”€ NORMAL HESAPLAMA (10sn+) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── NORMAL HESAPLAMA (10sn+) ───────────────────────────────────────────
         if t < 30.0:
             complexity = max(0.5, min(legal_moves / 25.0, 2.5))
             think      = ((t * 0.18) + (inc * 0.80)) * complexity
             return max(0.05, min(think, t * 0.5) - buffer)
 
         # Rapid/Classical (30sn+)
-        if move_count < 15:     divisor = 40
+        if move_count < 15:    divisor = 40
         elif move_count < 40:   divisor = 25
         elif move_count < 60:   divisor = 15
-        else:                   divisor = 8    # Oyun sonu: daha Ã§ok dÃ¼ÅŸÃ¼n
+        else:                   divisor = 8    # Oyun sonu: daha çok düşün
 
         base_time  = t / divisor
         final_time = base_time + (inc * 0.6)
@@ -341,7 +329,7 @@ class OxydanV11:
         my_time = self.to_seconds(wtime if board.turn == chess.WHITE else btime)
         my_inc  = self.to_seconds(winc  if board.turn == chess.WHITE else binc)
 
-        # 1. KÄ°TAP
+        # 1. KİTAP
         if not board.chess960 and os.path.exists(self.book_path):
             try:
                 with chess.polyglot.open_reader(self.book_path) as reader:
@@ -360,7 +348,7 @@ class OxydanV11:
                             if entry.move in board.legal_moves:
                                 return entry.move
             except Exception as e:
-                print(f"ğŸ“– Kitap HatasÄ±: {e}")
+                print(f"📖 Kitap Hatası: {e}")
 
         # 2. TABLEBASE
         if (SETTINGS.get("ONLINE_TABLEBASE_ENABLED", True)
@@ -385,7 +373,7 @@ class OxydanV11:
         # 3. MOTOR
         engine = None
         try:
-            engine = self.engine_pool.get(timeout=1)
+            engine = self.engine_pool.get(timeout=5)
             think   = self.calculate_smart_time(my_time, my_inc, board)
 
             white_clock = self.to_seconds(wtime)
@@ -400,7 +388,10 @@ class OxydanV11:
                 white_inc=white_inc,
                 black_inc=black_inc,
             )
-            result = engine.play(board, limit, timeout=max(0.05, think + 0.25))
+            
+            # ✅ GÜNCELLEME: Motorun kilitlenme/çökme riskine karşı güvenlik paylı timeout eklendi.
+            result = engine.play(board, limit, timeout=think + 0.5)
+            
             if result.move and result.move in board.legal_moves:
                 if len(board.move_stack) <= 10:
                     board.push(result.move)
@@ -409,18 +400,17 @@ class OxydanV11:
                     )
                     board.pop()
                 return result.move
-            print(f"âš ï¸ Motor yasal olmayan hamle: {result.move}, fallback.")
+            print(f"⚠️ Motor yasal olmayan hamle: {result.move}, fallback.")
         except Exception as e:
-            print(f"ğŸš¨ Motor HatasÄ±: {e}")
+            print(f"🚨 Motor Hatası (Fallback tetiklendi!): {type(e).__name__} - {e}")
         finally:
             if engine:
                 self.engine_pool.put(engine)
 
         return self.fallback_move(board)
 
-
 # ==========================================================
-# ğŸ® OYUN YÃ–NETÄ°MÄ°
+# 🎮 OYUN YÖNETİMİ
 # ==========================================================
 
 def _get_game_mode(time_control):
@@ -433,10 +423,6 @@ def _get_game_mode(time_control):
 
 
 def _send_message(client, game_id, text, spectator=False):
-    """
-    âœ… DÃœZELTME 2: post_chat_message â†’ post_message
-    Berserk kÃ¼tÃ¼phanesinde post_chat_message mevcut deÄŸil.
-    """
     if not SETTINGS.get("CHAT_ENABLED", True):
         return
     try:
@@ -445,7 +431,7 @@ def _send_message(client, game_id, text, spectator=False):
     except TypeError:
         pass
     except Exception as e:
-        print(f"âš ï¸ Mesaj gÃ¶nderilemedi ({game_id}, spectator={spectator}): {e}")
+        print(f"⚠️ Mesaj gönderilemedi ({game_id}, spectator={spectator}): {e}")
         return
 
     for kwargs in ({"room": "spectator" if spectator else "player"}, {}):
@@ -455,14 +441,13 @@ def _send_message(client, game_id, text, spectator=False):
         except TypeError:
             continue
         except Exception as e:
-            print(f"âš ï¸ Mesaj gÃ¶nderilemedi ({game_id}, {kwargs}): {e}")
+            print(f"⚠️ Mesaj gönderilemedi ({game_id}, {kwargs}): {e}")
             return
 
-    print(f"âš ï¸ Mesaj gÃ¶nderilemedi ({game_id}): post_message imzasÄ± uyumsuz.")
+    print(f"⚠️ Mesaj gönderilemedi ({game_id}): post_message imzası uyumsuz.")
 
 
 def handle_game(client, game_id, bot, my_id, mm):
-    # âœ… DÃœZELTME 5: start_time parametresi kaldÄ±rÄ±ldÄ± â€” iÃ§inde kullanÄ±lmÄ±yordu
     try:
         stream = client.bots.stream_game_state(game_id)
 
@@ -491,16 +476,14 @@ def handle_game(client, game_id, bot, my_id, mm):
                 opp_title   = (opp.get('title') or '').upper()
                 is_vs_human = opp_title != 'BOT'
 
-                # âœ… DÃœZELTME 3: Blacklist resign kontrolÃ¼
                 if opp_id.lower() in MM_SETTINGS.get("PERMANENT_BLACKLIST", set()):
-                    print(f"ğŸš« Blacklisted rakip: {opp_id} â€” resign yapÄ±lÄ±yor.")
+                    print(f"🚫 Blacklisted rakip: {opp_id} — resign yapılıyor.")
                     try:
                         client.bots.resign_game(game_id)
                     except Exception as e:
-                        print(f"âš ï¸ Resign hatasÄ±: {e}")
+                        print(f"⚠️ Resign hatası: {e}")
                     return
 
-                # Chess960 + initialFen ile doÄŸru board baÅŸlatma
                 variant     = state.get('variant', {}).get('key', 'standard')
                 is_960      = variant == 'chess960'
                 initial_fen = state.get('initialFen', 'startpos')
@@ -530,7 +513,6 @@ def handle_game(client, game_id, bot, my_id, mm):
 
             if board is None: continue
 
-            # Hamleleri gÃ¼ncelle (parse_uci + push: Chess960 rok iÃ§in doÄŸru yol)
             moves_str = curr_state.get('moves', '').strip()
             moves     = moves_str.split() if moves_str else []
 
@@ -540,22 +522,20 @@ def handle_game(client, game_id, bot, my_id, mm):
                     try:
                         board.push(board.parse_uci(m))
                     except Exception as e:
-                        print(f"âš ï¸ Hamle parse hatasÄ± ({m}): {e}")
+                        print(f"⚠️ Hamle parse hatası ({m}): {e}")
                         break
                 last_move_count = len(board.move_stack)
 
-            # Abort kontrolÃ¼
             if (not game_started
                     and game_start_time
                     and (time.time() - game_start_time) > SETTINGS["ABORT_WAIT_SECONDS"]):
                 try:
                     client.bots.abort_game(game_id)
-                    print(f"â±ï¸ Abort: {game_id} (rakip hamle yapmadÄ±)")
+                    print(f"⏳ Abort: {game_id} (rakip hamle yapmadı)")
                 except Exception as e:
-                    print(f"âš ï¸ Abort hatasÄ±: {e}")
+                    print(f"⚠️ Abort hatası: {e}")
                 break
 
-            # Oyun sonu
             status = curr_state.get('status')
             if status in ['mate', 'resign', 'draw', 'outoftime', 'aborted', 'stalemate']:
                 winner       = curr_state.get('winner')
@@ -579,7 +559,6 @@ def handle_game(client, game_id, bot, my_id, mm):
                     mm.record_game_result(result, game_mode, opponent_id=opp_id)
                 break
 
-            # Kaybetme farkÄ±ndalÄ±k mesajÄ± (sadece insanlara, orta oyun+)
             if (SETTINGS.get("SCORE_CHAT_ENABLED", False)
                     and is_vs_human and not losing_msg_sent
                     and len(board.move_stack) >= 20):
@@ -591,9 +570,8 @@ def handle_game(client, game_id, bot, my_id, mm):
                             _send_message(client, game_id, pick_message("losing_realization"))
                             losing_msg_sent = True
                 except Exception as e:
-                    print(f"âš ï¸ Skor hatasÄ±: {e}")
+                    print(f"⚠️ Skor hatası: {e}")
 
-            # Hamle sÄ±rasÄ±
             if board.turn == my_color and not board.is_game_over():
                 move = bot.get_best_move(
                     board,
@@ -611,11 +589,10 @@ def handle_game(client, game_id, bot, my_id, mm):
                             time.sleep(0.05)
 
     except Exception as e:
-        print(f"ğŸš¨ Oyun HatasÄ± ({game_id}): {e}", flush=True)
+        print(f"🚨 Oyun Hatası ({game_id}): {e}", flush=True)
 
 
 def handle_game_wrapper(game_id, bot, my_id, active_games, active_games_lock, mm):
-    # âœ… DÃœZELTME 5: start_time parametresi kaldÄ±rÄ±ldÄ±
     client = make_client()
     try:
         handle_game(client, game_id, bot, my_id, mm)
@@ -624,7 +601,7 @@ def handle_game_wrapper(game_id, bot, my_id, active_games, active_games_lock, mm
 
 
 # ==========================================================
-# ğŸš€ ANA DÃ–NGÃœ
+# 🚀 ANA DÖNGÜ
 # ==========================================================
 
 def main():
@@ -636,7 +613,7 @@ def main():
             config = yaml.safe_load(f)
         my_id = client.account.get()['id']
     except Exception as e:
-        print(f"BaÄŸlantÄ±/Config HatasÄ±: {e}")
+        print(f"Bağlantı/Config Hatası: {e}")
         return
 
     if config and "matchmaking" in config:
@@ -660,14 +637,13 @@ def main():
         )
         threading.Thread(target=mm.start, daemon=True).start()
 
-    # âœ… DÃœZELTME 1: runtime_watchdog artÄ±k tanÄ±mlÄ±, sorunsuz baÅŸlar
     threading.Thread(
         target=runtime_watchdog,
         args=(start_time, active_games, active_games_lock),
         daemon=True
     ).start()
 
-    print(f"ğŸ”¥ Oxydan 11 HazÄ±r. ID: {my_id} | Watchdog Devrede.", flush=True)
+    print(f"🔥 Oxydan 11 Hazır. ID: {my_id} | Watchdog Devrede.", flush=True)
 
     while True:
         try:
@@ -707,28 +683,28 @@ def main():
                         if can_accept:
                             client.challenges.accept(ch_id)
                             print(
-                                f"âœ… Kabul: {ch_id} | {reason} | "
+                                f"✅ Kabul: {ch_id} | {reason} | "
                                 f"Kalan: {int(time_remaining)}s | "
-                                f"Tahmini maÃ§: {int(estimated_game_duration)}s",
+                                f"Tahmini maç: {int(estimated_game_duration)}s",
                                 flush=True
                             )
                         else:
                             if not is_time_safe:
-                                detail = f"Oturum sÃ¼resi yetersiz ({int(time_remaining)}s < {int(estimated_game_duration)}s)"
+                                detail = f"Oturum süresi yetersiz ({int(time_remaining)}s < {int(estimated_game_duration)}s)"
                             elif time_limit > SETTINGS["MAX_GAME_TIME_LIMIT"]:
-                                detail = f"Oyun Ã§ok uzun ({time_limit}s)"
+                                detail = f"Oyun çok uzun ({time_limit}s)"
                             elif active_count(active_games, active_games_lock, pending_starts) >= SETTINGS["MAX_PARALLEL_GAMES"]:
-                                detail = "Paralel maÃ§ limiti dolu"
+                                detail = "Paralel maç limiti dolu"
                             else:
                                 detail = reason
 
                             client.challenges.decline(ch_id, reason='later')
-                            print(f"âŒ Reddedildi: {ch_id} | {detail}", flush=True)
+                            print(f"❌ Reddedildi: {ch_id} | {detail}", flush=True)
 
                     except Exception as ce:
                         if can_accept:
                             release_reserved_slot(active_games_lock, pending_starts)
-                        print(f"âš ï¸ Challenge iÅŸleme hatasÄ±: {ce}", flush=True)
+                        print(f"⚠️ Challenge işleme hatası: {ce}", flush=True)
 
                 elif event['type'] == 'gameStart':
                     game_id = event['game']['id']
@@ -736,13 +712,12 @@ def main():
                     if active_add_if_room(active_games, active_games_lock, game_id):
                         threading.Thread(
                             target=handle_game_wrapper,
-                            # âœ… DÃœZELTME 5: start_time args'dan kaldÄ±rÄ±ldÄ±
                             args=(game_id, bot, my_id, active_games, active_games_lock, mm),
                             daemon=True
                         ).start()
 
         except Exception as e:
-            print(f"âš ï¸ Lichess akÄ±ÅŸÄ± koptu, yeniden baÄŸlanÄ±lÄ±yor: {e}", flush=True)
+            print(f"⚠️ Lichess akışı koptu, yeniden bağlanılıyor: {e}", flush=True)
             time.sleep(5)
 
 

@@ -2,8 +2,8 @@ name: Oxydan Lichess Bot
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-  
+  cancel-in-progress: false # ✅ DÜZELTİLMEDİ: Maç ortasında botun aniden öldürülüp ban yememesi için false yapıldı
+
 on:
   workflow_dispatch: # Manuel başlatma
   schedule:
@@ -19,17 +19,14 @@ jobs:
       - name: Python Kurulumu
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11' # Gelişmiş havuz yönetimi ve performans için 3.11'e çekildi
+          python-version: '3.11'
 
       - name: Cerebellum Kitabini Indir ve Kur
         run: |
           echo "📚 Devasa açılış kitabı indiriliyor..."
           curl -L "https://github.com/Scriptionz/Oxydan-Chess-Bot/releases/download/v1_Book/Cerebellum3Merge.zip" -o book.zip
-          
           echo "📂 ZIP'ten çıkarılıyor..."
-          unzip book.zip
-          
-          # Dosya adını kodun tanıması için 'book.bin' yapıyoruz
+          unzip -o book.zip
           mv Cerebellum3Merge.bin book.bin
           echo "✅ Kitap hazır: $(ls -lh book.bin)"
 
@@ -37,18 +34,23 @@ jobs:
         run: |
           pip install -r requirements.txt
 
+      # ✅ OPTİMİZASYON: Her 6 saatte bir sıfırdan derlememek için motoru önbelleğe alıyoruz
+      - name: Motor Cache Kontrolü
+        id: cache-engine
+        uses: actions/cache@v4
+        with:
+          path: src/Ethereal
+          key: ${{ runner.os }}-ethereal-${{ hashFiles('src/*.c', 'src/*.h') }}
+
       - name: Motoru Derle (Orijinal Klasik Güçlü Mod)
+        if: steps.cache-engine.outputs.cache-hit != 'true' # Sadece cache yoksa derler
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential clang
           cd src
-          
-          echo "🧹 Eski kalıntılar temizleniyor..."
           rm -f Ethereal dummy.nnue 2>/dev/null || true
-          
           echo "🚀 Orijinal ayarlarla (NNUE=0) motor derleniyor..."
           clang -O3 -std=gnu11 -Wall -Wextra -DNDEBUG -flto -DUSE_NNUE=0 -march=native *.c pyrrhic/tbprobe.c -lpthread -lm -o Ethereal
-          
           if [ -f Ethereal ]; then
             chmod +x Ethereal
             echo "✅ Motor başarıyla derlendi."
@@ -61,16 +63,14 @@ jobs:
       - name: Oxydan V11 Pre-Flight Diagnostics (Gelişmiş Teşhis)
         run: |
           chmod +x ./src/Ethereal
-          # Yeni güncellediğimiz check_bot.py dosyasını çalıştırarak 
-          # sınıf uyumluluğunu ve zombi süreç kalıntılarını denetliyoruz.
           python check_bot.py
 
       - name: Botu Baslat
         env:
           LICHESS_TOKEN: ${{ secrets.LICHESS_TOKEN }}
         run: |
-          # Config dosyasındaki token yer tutucusunu güncelle
-          sed -i "s/\$LICHESS_TOKEN/$LICHESS_TOKEN/g" config.yml || echo "Config hatasi!"
+          # ✅ DÜZELTİLMEDİ: Özel karakter barındıran tokenların sed komutunu kırmasını engelleyen güvenli Python yöntemi
+          python -c "import os; text = open('config.yml').read().replace('\$LICHESS_TOKEN', os.environ['LICHESS_TOKEN']); open('config.yml', 'w').write(text)" || echo "Config hatasi!"
           
           # Botu başlat
           python -u lichess-bot.py

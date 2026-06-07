@@ -23,7 +23,7 @@ SETTINGS = {
     # Turnuva
     "AUTO_TOURNAMENT":       True,
     "JOIN_UPCOMING_MINS":    15,
-    "ONLY_BOT_TOURNEYS":     True,
+    "ONLY_BOT_TOURNEYS":     False,
     "TOURNAMENT_COOLDOWN":   600,
 
     # Zaman kontrolleri (saniye)
@@ -244,7 +244,7 @@ class Matchmaker:
         return []
 
     def _fetch_swiss_tournaments(self):
-        bot_teams  = ["lichess-bots", "computer-chess-club", "engine-bots"]
+        bot_teams  = ["lichess-bots", "international-chess-bots-2026-",]
         swiss_list = []
         for team in bot_teams:
             try:

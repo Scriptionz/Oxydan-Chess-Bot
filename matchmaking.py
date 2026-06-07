@@ -219,7 +219,7 @@ class Matchmaker:
             return False
 
     # ==========================================================
-    # 🏆 TURNUVA YÖNETİMİ
+    # 🏆 TURNUVA YÖNETİMİ (GÜNCELLENDİ)
     # ==========================================================
 
     def _auth_headers(self):
@@ -244,7 +244,8 @@ class Matchmaker:
         return []
 
     def _fetch_swiss_tournaments(self):
-        bot_teams  = ["lichess-bots", "international-chess-bots-2026-",]
+        # 🎯 Takım adı düzeltildi (Sondaki fazla tire kaldırıldı)
+        bot_teams  = ["lichess-bots", "international-chess-bots-2026"]
         swiss_list = []
         for team in bot_teams:
             try:
@@ -263,6 +264,28 @@ class Matchmaker:
                 if "429" in str(e): raise
                 print(f"⚠️ [Swiss] {team}: {e}")
         return swiss_list
+
+    def _fetch_team_arena_tournaments(self):
+        """👑 YENİ: Takımın içindeki Arena turnuvalarını çeken fonksiyon (Link Hatası Düzeltildi)"""
+        # API için sondaki tireyi kaldırdık, Lichess sistemi bu şekilde kabul ediyor:
+        bot_teams  = ["lichess-bots", "international-chess-bots-2026"]
+        team_arena_list = []
+        for team in bot_teams:
+            try:
+                r = requests.get(
+                    f"https://lichess.org/api/team/{team}/arena",
+                    headers=self._auth_headers(), timeout=10
+                )
+                if r.status_code == 429: raise Exception("HTTP 429")
+                if r.status_code == 200:
+                    for line in r.text.strip().split('\n'):
+                        if line:
+                            try: team_arena_list.append(json.loads(line))
+                            except: pass
+            except Exception as e:
+                if "429" in str(e): raise
+                print(f"⚠️ [Team Arena] {team}: {e}")
+        return team_arena_list
 
     def _join_arena(self, tid):
         try:
@@ -296,8 +319,9 @@ class Matchmaker:
         if (time.time() - self.last_tournament_join) < SETTINGS["TOURNAMENT_COOLDOWN"]:
             return
 
-        print("[Matchmaker] Turnuvalar taranıyor (Arena + Swiss)...")
+        print("[Matchmaker] Turnuvalar taranıyor (Genel Arena + Swiss + Takım Arenası)...")
 
+        # 1. Genel Arenaları Tara
         for t in self._fetch_arena_tournaments():
             tid  = t.get('id')
             if tid in self.registered_tournaments: continue
@@ -311,6 +335,7 @@ class Matchmaker:
                 print(f"🏆 [Arena] KATILINDI: {t.get('fullName')}")
                 return
 
+        # 2. Swiss Turnuvalarını Tara
         for s in self._fetch_swiss_tournaments():
             sid  = s.get('id')
             if sid in self.registered_tournaments: continue
@@ -322,6 +347,21 @@ class Matchmaker:
                 self.registered_tournaments.add(sid)
                 self.last_tournament_join = time.time()
                 print(f"🏆 [Swiss] KATILINDI: {s.get('name')}")
+                return
+
+        # 3. 👑 Kendi Takımının Arenalarını Tara
+        for ta in self._fetch_team_arena_tournaments():
+            taid = ta.get('id')
+            if taid in self.registered_tournaments: continue
+            # Takım arenalarında 'fullName' yerine bazen sadece 'name' döner, ikisini de kontrol ediyoruz
+            name = ta.get('fullName', ta.get('name', '')).lower()
+            if SETTINGS.get("ONLY_BOT_TOURNEYS") and "bot" not in name: continue
+            starts = ta.get('startsAt', 0) / 1000
+            if starts > 0 and (starts - time.time()) > SETTINGS["JOIN_UPCOMING_MINS"] * 60: continue
+            if self._join_arena(taid):
+                self.registered_tournaments.add(taid)
+                self.last_tournament_join = time.time()
+                print(f"🏆 [Takım Arenası] KATILINDI: {ta.get('name')}")
                 return
 
     def _cleanup_history(self):

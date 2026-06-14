@@ -299,16 +299,17 @@ class OxydanV11:
             except Exception as e:
                 print(f"📖 Kitap Hatası: {e}")
 
-        # 2. TABLEBASE DETEKSİYONU
+        # 2. TABLEBASE DETEKSİYONU (⚡ BULLET İÇİN OPTİMİZE EDİLDİ)
+        # Bullet modunda veya 15 saniyenin altında internetten tablebase sorgulamak intihardır.
         if (SETTINGS.get("ONLINE_TABLEBASE_ENABLED", True)
-                and my_time >= SETTINGS.get("MIN_TIME_FOR_TABLEBASE", 12.0)
+                and my_time >= max(15.0, SETTINGS.get("MIN_TIME_FOR_TABLEBASE", 12.0))
                 and not board.chess960
                 and len(board.piece_map()) <= SETTINGS["TABLEBASE_PIECE_LIMIT"]):
             try:
                 r = requests.get(
                     "https://tablebase.lichess.ovh/standard",
                     params={"fen": board.fen()},
-                    timeout=min(0.4, max(0.05, my_time * 0.02))
+                    timeout=min(0.2, max(0.02, my_time * 0.01))
                 )
                 if r.status_code == 200:
                     data = r.json()
@@ -319,13 +320,12 @@ class OxydanV11:
             except:
                 pass
 
-        # 3. 🚀 YENİLENEN MOTOR VE ZAMAN YÖNETİMİ
+        # 3. 🚀 MOTOR VE DİNAMİK ZAMAN YÖNETİMİ
         engine = None
         try:
             engine = self.engine_pool.get(timeout=5)
-            buffer = SETTINGS.get("LATENCY_BUFFER", 0.07)
+            buffer = SETTINGS.get("LATENCY_BUFFER", 0.05) # Bullet için ideal ping tamponu 50ms civarıdır
 
-            # Hamle sırasına göre aktif ve pasif oyuncunun sürelerini ayırıyoruz
             if board.turn == chess.WHITE:
                 my_raw_time, op_raw_time = wtime, btime
                 my_raw_inc, op_raw_inc = winc, binc
@@ -333,32 +333,30 @@ class OxydanV11:
                 my_raw_time, op_raw_time = btime, wtime
                 my_raw_inc, op_raw_inc = binc, winc
 
-            # Saniyelere dönüştürme ve ping koruması (buffer) uygulaması
-            my_seconds = max(0.01, self.to_seconds(my_raw_time) - buffer)
-            op_seconds = max(0.01, self.to_seconds(op_raw_time) - buffer)
+            my_seconds = max(0.005, self.to_seconds(my_raw_time) - buffer)
+            op_seconds = max(0.005, self.to_seconds(op_raw_time) - buffer)
             my_inc_seconds = self.to_seconds(my_raw_inc)
             op_inc_seconds = self.to_seconds(op_raw_inc)
 
             # =================================================================
-            # ⚡ AKILLI CLOCK MANİPÜLASYONU (KADEMELİ SÜRE YÖNETİMİ)
+            # ⚡ BULLET UYUMLU AKILLI CLOCK MANİPÜLASYONU
             # =================================================================
-            if my_seconds < 10.0:
-                # 🛑 1. ULTRA PANİK: Artırmayı gizle, saati çok az göster.
-                # min(my_seconds, ...) ekleyerek botun elindeki gerçek süreden 
-                # daha büyük bir yalan söylemesini kesinlikle engelliyoruz!
-                panic_time = my_inc_seconds * 0.3 if my_inc_seconds > 0 else 0.20
-                my_send_time = max(0.02, min(my_seconds * 0.5, panic_time))
+            # Bullet oyunlar genellikle 60 saniye olduğu için eski 25s sınırı motoru çok erken kısıtlıyordu.
+            
+            if my_seconds < 2.0:
+                # 🛑 1. ULTRA PANİK (Son 2 Saniye): Zamandan kaybetmemek için pre-move hızında oyna
+                # Motorun saniyenin %5 ila %10'u kadar düşünmesini sağlıyoruz.
+                my_send_time = max(0.010, my_seconds * 0.10)
                 my_send_inc = 0.0
-            elif my_seconds < 25.0:
-                # ⚠️ 2. GÜVENLİ GEÇİŞ BÖLGESİ: Derin düşünmeyi engelle, süre biriktir.
-                my_send_time = my_seconds
-                my_send_inc = my_inc_seconds * 0.3
+            elif my_seconds < 12.0:
+                # ⚠️ 2. GEÇİŞ BÖLGESİ (Son 12 Saniye): Süre azalıyor, hızı artır ama artırmayı doğru ilet
+                my_send_time = my_seconds * 0.8
+                my_send_inc = my_inc_seconds # Artırmayı çarpıp motoru kör etmiyoruz
             else:
-                # 🧠 3. STANDART MOD: Süre sağlıklı, Ethereal özgür.
+                # 🧠 3. STANDART MOD (12 Saniye Üstü): Motor elindeki süreyi en verimli şekilde hesaplar
                 my_send_time = my_seconds
                 my_send_inc = my_inc_seconds
 
-            # Renklere göre limit nesnesini dinamik olarak dolduruyoruz
             if board.turn == chess.WHITE:
                 limit = chess.engine.Limit(
                     white_clock=my_send_time,

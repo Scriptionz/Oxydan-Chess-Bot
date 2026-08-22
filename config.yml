@@ -1,33 +1,63 @@
-# --- LICHESS BAĞLANTI AYARLARI ---
+# ============================================================
+# Oxydan 12 — Configuration
+# ============================================================
+# Every key here is optional. Anything you omit falls back to the
+# defaults baked into `config.py`. Edit, then commit, then restart the
+# GitHub Actions workflow (or `python lichess-bot.py` locally).
+#
+# First-time fork setup:
+#   1. Fork this repo
+#   2. Edit `config.yml` — at minimum change `engine.name` if your
+#      binary isn't named "Ethereal" and replace the token placeholder
+#   3. Add your Lichess OAuth token as a GitHub Actions secret named
+#      `LICHESS_TOKEN`
+#   4. (Optional) Tweak the matchmaking tier thresholds and the
+#      opening-book path
+# ============================================================
+
+# --- LICHESS CONNECTION ---------------------------------------------------
+# The `$LICHESS_TOKEN` placeholder is replaced with the secret at runtime
+# in the GitHub Actions workflow. You can also paste a literal token here
+# for local runs (don't commit it).
 token: "$LICHESS_TOKEN"
 url: "https://lichess.org/"
 
-# --- MOTOR (UCI) AYARLARI ---
+# --- ENGINE (UCI) ---------------------------------------------------------
+# `name` is the compiled binary, looked up inside `dir`.
+# The build pipeline in `.github/workflows/main.yml` produces
+# `src/Ethereal` from the C sources; change this block if you ship a
+# different engine.
 engine:
   dir: "./src/"
   name: "Ethereal"
   protocol: "uci"
   uci_options:
-    Threads: 2            # İşlemciyi boğmadan performans almak için 2 idealdir
+    Threads: 2
     Hash: 512
-    MoveOverhead: 100     # 500ms bullet için çok yüksekti, 100ms güvenli hıza çekildi
-    Ponder: true          # Akıllı Pondering özelliği için aktif edildi
+    MoveOverhead: 100
+    Ponder: true
     SyzygyPath: "./syzygy"
     SyzygyProbeDepth: 1
 
-# --- SOSYAL AYARLAR (CHAT) ---
+# --- IN-GAME CHAT (Lichess-bot spec) --------------------------------------
+# These are the user-facing welcome/goodbye strings shown in the
+# dedicated chat panel. Oxydan-specific message pools (greetings,
+# win/loss replies, etc.) live in `oxydan_chat.py` and are easy to
+# extend from there.
 chat:
-  welcome: "Hi! Oxydan 11 active. Advanced Pondering & Local Tablebase enabled. Good luck!"
-  goodbye: "GG! Thanks for the game. Let's analyze later if you want!"
+  welcome: "Hi! Oxydan 11 active. Good luck!"
+  goodbye: "GG! Thanks for the game."
 
-# --- LICHESS TAKIM AYARLARI ---
+# --- TEAMS ----------------------------------------------------------------
+# `priority_mode` means challenges from members of these teams bypass
+# the normal matchmaking cooldown.
 teams:
-  priority_mode: true     # Botun eklendiği takımlardan gelen isteklere öncelik ver
+  priority_mode: true
   allowed_teams:
     - "lichess-bots"
     - "computer-chess-club"
 
-# --- SAVAŞ MODU (GELEN MEYDAN OKUMALAR) ---
+# --- INCOMING CHALLENGE POLICY (Lichess-bot spec) -------------------------
 challenge_policy:
   accept_bot: true
   accept_human: true
@@ -37,26 +67,26 @@ challenge_policy:
     - blitz
     - rapid
     - classical
-  min_time: 30            # Hyperbullet (30s) maçları da kabul edebilmesi için düşürüldü
+  min_time: 30
   max_time: 2000
 
-# --- MATCHMAKING & TURNUVA (HYBRID) ---
+# --- MATCHMAKING ----------------------------------------------------------
+# These settings drive the *outgoing* challenge loop and the
+# auto-tournament scanner. Tiers are rating ranges; the bot picks
+# one with weighted-random each iteration.
 matchmaking:
   allow_feed: true
-  challenge_interval: 60
-  challenge_timeout: 30
   max_games: 2
-  
-  # --- Turnuva Ayarları ---
-  auto_tournament: true
-  join_upcoming_mins: 15
-  only_bot_tourneys: false # Takım turnuvalarında insanlarla da oynayabilmesi için esnetildi
-  
-  # --- ELO KORUMA FİLTRESİ ---
-  opponent_min_rating: 1500
-  opponent_max_rating: 4000
-  opponent_rating_difference: 700
 
+  # Auto-tournament
+  auto_tournament: true
+  join_upcoming_mins: 15        # how early to join a not-yet-started event
+  only_bot_tourneys: false      # if true, skip tournaments without "bot" in the name
+  tournament_scan_interval: 45  # seconds between API scans
+  tournament_cooldown: 120      # seconds between actual join POSTs
+
+  # Time controls offered to opponents (and the bot's own outgoing
+  # challenges, when no specific tier is requesting otherwise)
   time_controls:
     - "1+0"
     - "1+1"
@@ -67,7 +97,83 @@ matchmaking:
     - "5+2"
     - "10+0"
     - "10+2"
-    
-  challenge_bots: true
-  challenge_humans: true   # Takım arkadaşlarından gelen istekler için aktif
-  selection: "random"
+
+  # Tier distribution — probabilities are cumulative.
+  # Default: Low 10% | Mid 23% | High 35% | Elite 32%
+  tier_thresholds:
+    LOW:  0.10
+    MID:  0.33
+    HIGH: 0.68
+  tier_elite: [2700, 4000]
+  tier_high:  [2300, 2700]
+  tier_mid:   [2000, 2300]
+  tier_low:   [1500, 2000]
+
+  # Variant variety
+  chess960_chance: 0.10
+  rated_mode: true
+
+  # Opponent history & blacklists
+  max_games_per_opponent: 3
+  opponent_history_seconds: 3600
+  blacklist_minutes: 60
+  failed_challenge_blacklist_minutes: 10
+  permanent_blacklist:
+    - "waychess-bot"
+
+  # Safety
+  pool_refresh_seconds: 600
+  safety_lock_time: 45
+
+  # Protection mode (auto-engaged on rating drop or losing streak)
+  losing_streak_limit: 3
+  rating_drop_threshold: 50
+  protection_game_count: 10
+
+# --- TIME MANAGEMENT ------------------------------------------------------
+# On top of the engine's `MoveOverhead`, the bot layers its own policy.
+# See `lichess-bot.py` (`OxydanV12._allocate_time`) for the math.
+time_management:
+  latency_buffer_ms: 70           # network safety margin
+  panic_threshold_s: 2.0          # <2s on clock → pre-move speed
+  transition_threshold_s: 12.0    # 2-12s → 80% clock + full increment
+  opening_move_count: 10          # plies spent in "fast opening" mode
+  opening_time_fraction: 0.35     # opening budget (35% of clock)
+  complexity_moves_threshold: 30  # past this ply, complexity bonus kicks in
+  complexity_extra_fraction: 0.10 # +10% of clock for tactical middlegame
+
+# --- RUNTIME / SAFETY -----------------------------------------------------
+runtime:
+  max_total_runtime_seconds: 21600  # 6h, matches GitHub Actions cap
+  max_game_time_limit: 1800         # refuse games longer than 30+0
+  min_game_seconds_remaining: 300   # 5min safety before runtime cap
+  abort_wait_seconds: 60            # auto-abort if opponent never moves
+  min_time_to_decline: 600
+  max_parallel_games: 2
+  stop_file: "STOP.txt"             # create this file to shut the bot down
+
+# --- TABLEBASE LOOKUP -----------------------------------------------------
+# 7-piece online tablebase via tablebase.lichess.ovh.
+tablebase:
+  online_enabled: true
+  min_time_for_lookup: 12.0  # don't query online TB with <12s on the clock
+  max_pieces: 7
+
+# --- OXYDAN CHAT ENGINE ---------------------------------------------------
+# These are the *behavioural* chat settings (the previous v11 hard-coded
+# MESSAGES dict). Toggle here without touching Python.
+oxydan_chat:
+  enabled: true
+  chat_in_rated: true          # set false to keep rated games silent
+  score_chat_enabled: false    # experimental "I know I'm losing" messages
+  losing_score_threshold: -300 # cp below this triggers the chat
+
+# --- OXYDAN LEARN (experimental) -----------------------------------------
+# Tracks opening win/loss rates in oxydan_learn.json. The opening book
+# is then weighted by the bot's own history. Disable for pure book play.
+oxydan_learn:
+  enabled: false
+  data_file: "oxydan_learn.json"
+  min_games_for_weighting: 5   # need N+ samples before a key is weighted
+  win_weight_multiplier: 1.5   # max boost for openings we win with
+  loss_weight_multiplier: 0.3  # min weight for openings we lose with

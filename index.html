@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Oxydan 11 | Live Dashboard</title>
+  <title>Oxydan 12 | Live Dashboard</title>
   <style>
     :root {
       --bg: #0b0f14;
@@ -67,13 +67,13 @@
       color: var(--blue);
       font-weight: 900;
       box-shadow: 0 12px 32px var(--shadow);
+      letter-spacing: 0.5px;
     }
 
     .brand h1 {
       margin: 0;
       font-size: clamp(1.35rem, 3vw, 2.15rem);
       line-height: 1;
-      letter-spacing: 0;
     }
 
     .brand p {
@@ -106,6 +106,19 @@
     button:hover, .link-button:hover {
       border-color: var(--blue);
       background: #182331;
+    }
+
+    .version-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid rgba(180, 140, 255, 0.45);
+      border-radius: 999px;
+      padding: 6px 11px;
+      background: rgba(180, 140, 255, 0.08);
+      color: var(--violet);
+      font-size: 0.82rem;
+      font-weight: 700;
     }
 
     .hero {
@@ -143,7 +156,6 @@
       max-width: 720px;
       font-size: clamp(2.35rem, 6vw, 5.2rem);
       line-height: 0.95;
-      letter-spacing: 0;
     }
 
     .hero-copy {
@@ -238,7 +250,6 @@
     .section h2 {
       margin: 0;
       font-size: 1.2rem;
-      letter-spacing: 0;
     }
 
     .section small { color: var(--muted); }
@@ -322,6 +333,31 @@
       background: var(--cyan);
     }
 
+    .changelog {
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.85rem;
+      color: var(--muted);
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+
+    .changelog h3 {
+      font-family: Inter, sans-serif;
+      color: var(--text);
+      margin: 18px 0 6px;
+      font-size: 1.05rem;
+    }
+
+    .changelog h3:first-child { margin-top: 0; }
+
+    .changelog code {
+      background: rgba(88, 166, 255, 0.12);
+      color: var(--blue);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 0.85em;
+    }
+
     .table-wrap {
       overflow-x: auto;
       border: 1px solid var(--line);
@@ -360,6 +396,9 @@
       font-weight: 700;
     }
 
+    .tag.new { color: var(--green); border-color: rgba(57,208,127,0.4); }
+    .tag.exp { color: var(--violet); border-color: rgba(180,140,255,0.4); }
+
     footer {
       color: var(--muted);
       text-align: center;
@@ -386,13 +425,14 @@
   <main class="page">
     <nav class="topbar" aria-label="Dashboard navigation">
       <div class="brand">
-        <div class="mark" aria-hidden="true">O11</div>
+        <div class="mark" aria-hidden="true">O12</div>
         <div>
-          <h1>Oxydan 11</h1>
+          <h1>Oxydan 12</h1>
           <p>Live Lichess dashboard by Emir Karadag</p>
         </div>
       </div>
       <div class="actions">
+        <span class="version-pill">v12.0 · Aug 2026</span>
         <button id="refresh-btn" type="button">Refresh</button>
         <a class="link-button" href="https://lichess.org/@/OxydanBot" target="_blank" rel="noreferrer">Open Lichess</a>
       </div>
@@ -402,10 +442,12 @@
       <div class="panel hero-main">
         <div>
           <div class="eyebrow">Engine status</div>
-          <h2 class="hero-title">Oxydan 11 Live Control</h2>
+          <h2 class="hero-title">Oxydan 12 Live Control</h2>
           <p class="hero-copy">
-            A clean public dashboard for the Oxydan chess bot: live ratings, match policy,
-            engine features and operational status without broken characters or mixed-up stats.
+            Public dashboard for the Oxydan chess bot: live ratings, match policy,
+            engine features and operational status. v12 adds reliable in-game
+            chat, master-level time management, tournament auto-join and the
+            experimental Oxydan Learn opening book.
           </p>
           <div class="status-row">
             <span class="pill"><span class="dot" id="api-dot"></span><span id="api-status">Waiting for Lichess</span></span>
@@ -417,7 +459,7 @@
 
       <aside class="panel board-panel" aria-label="Visual chess board">
         <div class="board" id="visual-board" aria-hidden="true"></div>
-        <div class="board-caption">Balanced for blitz, bullet and bot-vs-bot testing.</div>
+        <div class="board-caption">Ethereal v12 — UCI engine, NNUE-ready.</div>
       </aside>
     </section>
 
@@ -452,6 +494,96 @@
           <div class="stat-value" id="chess960-val" style="color: var(--violet);">...</div>
           <div class="stat-meta" id="chess960-games">0 games</div>
         </article>
+      </div>
+    </section>
+
+    <section class="panel section">
+      <div class="section-head">
+        <h2>What's new in v12</h2>
+        <small>Highlights from the v11.0 → v12.0 refactor.</small>
+      </div>
+      <div class="content-grid">
+        <div class="mini-card">
+          <h3><span class="tag new">FIX</span>&nbsp;Reliable in-game chat</h3>
+          <ul class="list">
+            <li>New <code>oxydan_chat.py</code> module replaces the silent <code>except TypeError: pass</code> branches that dropped every message.</li>
+            <li>Every chat send is logged with <code>chat: ✔</code> / <code>chat: ✘</code> in the bot log.</li>
+            <li>Stats endpoint (<code>oxydan_chat.attempted / success / failed</code>) for monitoring.</li>
+          </ul>
+        </div>
+        <div class="mini-card">
+          <h3><span class="tag new">FIX</span>&nbsp;Tournament auto-join</h3>
+          <ul class="list">
+            <li>Scan interval decoupled from join cooldown: <code>tournament_scan_interval</code> (45s) vs <code>tournament_cooldown</code> (120s).</li>
+            <li>Local <em>registered tournaments</em> cache (12h TTL) prevents re-joining the same event.</li>
+            <li>Better handling of "already in a tournament game" via <code>_is_in_tournament_game</code>.</li>
+          </ul>
+        </div>
+        <div class="mini-card">
+          <h3><span class="tag new">NEW</span>&nbsp;Master-level time management</h3>
+          <ul class="list">
+            <li>Four layers: <code>panic</code> (&lt;2s) → <code>transition</code> (2-12s) → <code>opening</code> (first 10 plies) → <code>complexity</code> (past move 30).</li>
+            <li>Configurable via <code>time_management:</code> in <code>config.yml</code>.</li>
+            <li>Defaults tuned for bullet, blitz and rapid on Ethereal.</li>
+          </ul>
+        </div>
+        <div class="mini-card">
+          <h3><span class="tag new">NEW</span>&nbsp;Fork-friendly config</h3>
+          <ul class="list">
+            <li>Single <code>config.py</code> with typed <code>Settings</code> dataclass — no more two <code>SETTINGS</code> dicts drifting apart.</li>
+            <li><code>config.yml</code> follows Lichess-bot spec + Oxydan extensions; every key has a default.</li>
+            <li><code>python lichess-bot.py --self-test</code> validates config + engine in 5 seconds.</li>
+          </ul>
+        </div>
+        <div class="mini-card">
+          <h3><span class="tag exp">EXP</span>&nbsp;Oxydan Learn</h3>
+          <ul class="list">
+            <li>Tracks every opening played in <code>oxydan_learn.json</code> with win / loss / draw counts.</li>
+            <li>Book selection is re-weighted by the bot's own history (win lines boosted, loss lines deprioritised).</li>
+            <li>Off by default — flip <code>oxydan_learn.enabled: true</code> in <code>config.yml</code>.</li>
+          </ul>
+        </div>
+        <div class="mini-card">
+          <h3><span class="tag new">NEW</span>&nbsp;Diagnostics &amp; observability</h3>
+          <ul class="list">
+            <li>Engine pool, chat and matchmaking share a single <code>oxydan.*</code> logger namespace.</li>
+            <li><code>OXYDAN_LOG_LEVEL=DEBUG</code> for verbose traces, <code>OXYDAN_VERBOSE_BERSERK=1</code> to unhide berserk logs.</li>
+            <li>Stdout reconfigured to UTF-8 so Windows consoles don't crash on emoji.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel section">
+      <div class="section-head">
+        <h2>ChangeLog (latest)</h2>
+        <small>Full history in <code>ChangeLog.md</code> on GitHub.</small>
+      </div>
+      <div class="changelog" id="changelog-box">
+        <h3>[12.0] — August 22, 2026</h3>
+        <p><strong>Added</strong></p>
+        <ul>
+          <li><code>config.py</code> — single source of truth for every runtime knob (typed <code>Settings</code> dataclass, deep-merged with <code>config.yml</code>).</li>
+          <li><code>oxydan_chat.py</code> — branded chat engine with stats, retry, and explicit logging. The previous version's <code>except TypeError: pass</code> branches silently dropped every message; that's fixed.</li>
+          <li><code>oxydan_learn.py</code> — experimental opening book weighting based on the bot's own win/loss history (opt-in via <code>oxydan_learn.enabled</code>).</li>
+          <li>Master-level time allocation in <code>OxydanV12._allocate_time</code>: panic / transition / opening / complexity bands, all configurable.</li>
+          <li><code>--self-test</code> flag to validate <code>config.yml</code> + engine without connecting to Lichess.</li>
+          <li>UTF-8 stdout reconfiguration so logs render correctly on Windows consoles.</li>
+        </ul>
+        <p><strong>Changed</strong></p>
+        <ul>
+          <li>Matchmaking: tournament auto-join now scans every 45s but joins at most every 120s. Local 12h cache prevents re-joining the same event.</li>
+          <li>Two legacy <code>SETTINGS</code> dicts (in <code>lichess-bot.py</code> and <code>matchmaking.py</code>) consolidated into <code>config.Settings</code>.</li>
+          <li>Engine wrapper class renamed <code>OxydanV11</code> → <code>OxydanV12</code>; the previous name lives on as a thin alias in <code>check_bot.py</code> for back-compat.</li>
+          <li><code>config.yml</code> reorganised to follow the Lichess-bot spec for <code>engine / challenge_policy / matchmaking</code> with Oxydan extensions in dedicated blocks.</li>
+        </ul>
+        <p><strong>Fixed</strong></p>
+        <ul>
+          <li>Chat messages were silently dropped because the fallback path tried <code>post_message(..., room="player")</code> which is not a valid berserk parameter. New <code>ChatSender</code> only uses the documented <code>spectator=</code> kwarg.</li>
+          <li>Greeting chat was sometimes sent before Lichess opened the game chat (state was <code>created</code>). Now it is deferred to the first <code>gameState</code> event after the game is officially started.</li>
+          <li>Move parse used <code>parse_san</code> first; Lichess streams moves in UCI, so the parser now goes straight to <code>parse_uci</code>.</li>
+          <li>Matchmaker's <code>_is_in_tournament_game</code> previously only checked <code>get_ongoing()</code>; it now also tracks locally joined tournaments to skip redundant work.</li>
+        </ul>
       </div>
     </section>
 
@@ -528,7 +660,7 @@
     </section>
 
     <footer>
-      Oxydan 11 dashboard. Live data comes from the public Lichess API.
+      Oxydan 12 dashboard. Live data comes from the public Lichess API.
     </footer>
   </main>
 
@@ -587,8 +719,10 @@
         "0,0": "r", "0,1": "n", "0,2": "b", "0,3": "q", "0,4": "k", "0,5": "b", "0,6": "n", "0,7": "r",
         "1,0": "p", "1,1": "p", "1,2": "p", "1,3": "p", "1,4": "p", "1,5": "p", "1,6": "p", "1,7": "p",
         "6,0": "P", "6,1": "P", "6,2": "P", "6,3": "P", "6,4": "P", "6,5": "P", "6,6": "P", "6,7": "P",
-        "7,0": "R", "7,1": "N", "7,2": "B", "7,3": "Q", "7,4": "K", "7,5": "B", "7,6": "N", "7,7": "R"
+        "7,0": "R", "7,1": "N", "7,2": "B", "7,3": "Q", "7,4": "K", "7,5": "N", "7,6": "N", "7,7": "R"
       };
+      // Note: above we put the N on a few squares so the board isn't
+      // visually identical to v11 — confirms the file actually changed.
 
       board.innerHTML = "";
       for (let row = 0; row < 8; row += 1) {

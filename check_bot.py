@@ -1,90 +1,101 @@
-import chess
+"""Oxydan pre-flight diagnostics.
+
+Runs a single engine move to confirm:
+  * ``config.yml`` is valid (via :mod:`config`)
+  * The compiled engine binary exists
+  * The engine produces a legal move on the starting position
+  * The engine pool can be drained cleanly
+
+Also exposes a back-compat alias so the workflow (which historically
+imported ``OxydanV11``) still works.
+"""
+
+from __future__ import annotations
+
+import importlib.util
 import os
 import sys
-import importlib.util
 import time
 
-def run_diagnostic():
-    print("🛠️ Oxydan V11 Pre-Flight Diagnostics...")
-    
-    # 1. Dosya Yollarını Tanımla
+import chess
+
+import config as oxydan_config
+
+
+def _load_bot_module():
     main_script = "lichess-bot.py"
-    exe_path = "./src/Ethereal"
-    
-    # 2. Dosya Kontrolleri
     if not os.path.exists(main_script):
-        print(f"❌ ERROR: {main_script} bulunamadı!")
+        print(f"❌ ERROR: {main_script} not found in {os.getcwd()}")
         sys.exit(1)
-        
+    spec = importlib.util.spec_from_file_location("lichess_bot_module", main_script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def run_diagnostic() -> int:
+    print("🛠️ Oxydan v12 pre-flight diagnostics...")
+
+    settings = oxydan_config.settings
+    exe_path = settings.engine.binary_path
+
     if not os.path.exists(exe_path):
-        print(f"❌ ERROR: Motor dosyası (binary) {exe_path} konumunda yok!")
-        sys.exit(1)
+        print(f"❌ ERROR: Engine binary not found at {exe_path}")
+        return 1
 
     try:
-        # 3. Dinamik Olarak Modülü Yükle
-        spec = importlib.util.spec_from_file_location("lichess_bot_module", main_script)
-        lichess_bot_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(lichess_bot_module)
-        
-        try:
-            OxydanV11 = getattr(lichess_bot_module, "OxydanV11")
-        except AttributeError:
-            print("❌ ERROR: 'OxydanV11' sınıfı lichess-bot.py içinde bulunamadı!")
-            sys.exit(1)
-            
-        print("✅ Module loaded successfully.")
+        lichess_bot_module = _load_bot_module()
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ ERROR: Could not import lichess-bot.py: {exc}")
+        return 1
 
-        # 4. Motor Havuzu Başlatma Testi
-        print("🤖 Initializing engine instance for testing...")
-        bot = OxydanV11(exe_path, uci_options={"Hash": 16, "Threads": 1})
-        board = chess.Board()
-        
-        # 5. Hamle Üretme Testi
-        print("♟️ Testing pool-based engine move generation...")
-        
-        # 🛑 KRİTİK DÜZELTME: Fallback mekanizmasını test için devre dışı bırakıyoruz!
-        # Eğer motor hata verir veya kilitlenirse, python yedek hamle üreticisi devreye giremeyecek, 
-        # test doğrudan None alacak ve başarısız (fail) sayılacaktır.
-        bot.fallback_move = lambda b: None
-        
+    # Accept either OxydanV12 (current) or OxydanV11 (legacy) class.
+    BotClass = getattr(lichess_bot_module, "OxydanV12", None) or \
+               getattr(lichess_bot_module, "OxydanV11", None)
+    if BotClass is None:
+        print("❌ ERROR: Neither OxydanV12 nor OxydanV11 class found in lichess-bot.py")
+        return 1
+
+    print("✅ Module loaded successfully.")
+
+    try:
+        bot = BotClass(exe_path, uci_options={"Hash": 16, "Threads": 1})
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ ERROR: Engine failed to start: {exc}")
+        return 1
+
+    board = chess.Board()
+
+    # Disable fallback so a real engine failure surfaces clearly.
+    bot.fallback_move = lambda b: None  # type: ignore[assignment]
+
+    try:
         move = bot.get_best_move(board, 10000, 10000, 1000, 1000)
-        
-        if move and move in board.legal_moves:
-            print(f"✅ SUCCESS: Engine produced legal move: {move.uci()}")
-            
-            # --- HAVUZU GÜVENLİ BOŞALTMA ---
-            print("🧹 Cleaning up engine pool processes...")
-            closed_engines = 0
-            if hasattr(bot, 'engine_pool') and bot.engine_pool is not None:
-                while not bot.engine_pool.empty():
-                    try:
-                        engine = bot.engine_pool.get_nowait()
-                        engine.quit() 
-                        closed_engines += 1
-                    except Exception as e:
-                        print(f"⚠️ Bir motor kapatılırken hata oluştu: {e}")
-                    finally:
-                        if hasattr(bot.engine_pool, 'task_done'):
-                            bot.engine_pool.task_done()
-            else:
-                try:
-                    bot.quit()
-                    closed_engines += 1
-                except:
-                    pass
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ ERROR: get_best_move raised: {exc}")
+        return 1
 
-            time.sleep(1) 
-            print(f"✅ {closed_engines} motor başarıyla kapatıldı ve süreçler temizlendi.")
-            print("✅ Diagnostics passed. Ready for deployment.")
-            os._exit(0) 
-        else:
-            # 🚨 Motor çöktüğünde veya fallback devreye girmek zorunda kaldığında artık buraya düşecek:
-            print("❌ ERROR: Engine FAILED to produce a valid move! Fallback mechanism was bypassed.")
-            sys.exit(1)
+    if not move or move not in board.legal_moves:
+        print("❌ ERROR: Engine did not produce a legal move (fallback was disabled).")
+        return 1
+    print(f"✅ Engine produced legal move: {move.uci()}")
 
-    except Exception as e:
-        print(f"❌ CRITICAL ERROR during diagnostics: {e}")
-        sys.exit(1)
+    # Drain pool.
+    closed = 0
+    if hasattr(bot, "engine_pool") and bot.engine_pool is not None:
+        while not bot.engine_pool.empty():
+            try:
+                eng = bot.engine_pool.get_nowait()
+                eng.quit()
+                closed += 1
+            except Exception:  # noqa: BLE001
+                break
+    print(f"🧹 Closed {closed} engine process(es).")
+
+    time.sleep(1)
+    print("✅ Diagnostics passed. Ready for deployment.")
+    return 0
+
 
 if __name__ == "__main__":
-    run_diagnostic()
+    sys.exit(run_diagnostic())

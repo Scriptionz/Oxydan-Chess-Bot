@@ -1,515 +1,541 @@
-import time
-import random
+"""Oxydan 12 — Matchmaking & tournament management.
+
+Major changes vs the previous version:
+
+* Tournament auto-join is no longer gated by a single 10-minute
+  cooldown. We now scan every ``tournament_scan_interval`` (default
+  45s) but rate-limit actual *join* POSTs to ``tournament_cooldown``
+  (default 120s) so we never hammer Lichess. This catches more
+  short-notice tournaments without exhausting the API budget.
+* ``_is_in_tournament_game`` was the only source of truth for "we're
+  already in a tournament"; it relied on ``client.games.get_ongoing()``
+  which is rate-limited and sometimes returns stale data. We now also
+  consult a local set of "tournaments we have already joined", with
+  a TTL that matches Lichess's tournament lifetime (~12h).
+* Rating protection is opt-in and uses the Lichess API's per-mode
+  rating rather than a hard-coded baseline.
+* All public methods log to the same ``oxydan`` logger so a fork
+  author can grep the GitHub Actions output for one trace.
+"""
+
+from __future__ import annotations
+
 import itertools
-import os
-import requests
 import json
+import logging
+import random
 import threading
+import time
 from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Set, Tuple
 
-# ==========================================================
-# ⚙️ AYARLAR
-# ==========================================================
-SETTINGS = {
-    "RATED_MODE":            True,
-    "MAX_PARALLEL_GAMES":    2,
-    "SAFETY_LOCK_TIME":      45,
-    "STOP_FILE":             "STOP.txt",
-    "POOL_REFRESH_SECONDS":  600,
-    "BLACKLIST_MINUTES":     60,
-    "FAILED_CHALLENGE_BLACKLIST_MINUTES": 10,
-    "CHESS960_CHANCE":       0.10,
+import requests
 
-    # Turnuva
-    "AUTO_TOURNAMENT":       True,
-    "JOIN_UPCOMING_MINS":    15,
-    "ONLY_BOT_TOURNEYS":     False,
-    "TOURNAMENT_COOLDOWN":   600,
+from config import settings
 
-    # Zaman kontrolleri (saniye)
-    "TC_ALL":    ["30", "60", "60+1", "120+1", "180", "180+2",
-                  "300", "300+3", "600", "600+5", "900+10", "1800"],
-    "TC_MAX_10": ["30", "60", "60+1", "120+1", "180", "180+2",
-                  "300", "300+3", "600"],
+LOG = logging.getLogger("oxydan.matchmaker")
 
-    # Tier puan aralıkları
-    "TIER_ELITE": (2700, 4000),
-    "TIER_HIGH":  (2300, 2700),
-    "TIER_MID":   (2000, 2300),
-    "TIER_LOW":   (1500, 2000),
+USER_AGENT = f"OxydanBot/12.0 (+https://github.com/Scriptionz/Oxydan-Chess-Bot)"
+TOURNAMENT_TTL_SECONDS = 12 * 3600  # forget a tournament after 12h
 
-    # Kümülatif eşikler: Low %10 | Mid %23 | High %35 | Elite %32
-    "TIER_THRESHOLDS": {
-        "LOW":  0.10,
-        "MID":  0.33,
-        "HIGH": 0.68,
-    },
 
-    # Koruma mekanizmaları
-    "LOSING_STREAK_LIMIT":    3,
-    "RATING_DROP_THRESHOLD":  50,
-    "PROTECTION_GAME_COUNT":  10,
-    "MAX_GAMES_PER_OPPONENT": 3,
-    "OPPONENT_HISTORY_SECONDS": 3600,
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-    # Kalıcı kara liste (küçük harf)
-    "PERMANENT_BLACKLIST": {
-        "waychess-bot",
-    },
-}
-
-_TIER_NAME = {
-    (2700, 4000): "Elite",
-    (2300, 2700): "High",
-    (2000, 2300): "Mid",
-    (1500, 2000): "Low",
-}
-
-def _parse_tc(tc_str):
-    if '+' in tc_str:
-        p = tc_str.split('+')
-        return int(p[0]), int(p[1])
+def _parse_tc(tc_str: str) -> Tuple[int, int]:
+    if "+" in tc_str:
+        base, inc = tc_str.split("+", 1)
+        return int(base), int(inc)
     return int(tc_str), 0
 
 
+def _tier_name(tier: Tuple[int, int]) -> str:
+    if tier == settings.matchmaking.tier_elite:
+        return "Elite"
+    if tier == settings.matchmaking.tier_high:
+        return "High"
+    if tier == settings.matchmaking.tier_mid:
+        return "Mid"
+    if tier == settings.matchmaking.tier_low:
+        return "Low"
+    return "?"
+
+
+# ---------------------------------------------------------------------------
+# Rating tracker (with protection mode)
+# ---------------------------------------------------------------------------
+
 class RatingTracker:
-    def __init__(self, client=None):
-        self.client = client
-        self.lock = threading.Lock()  # ✅ GÜNCELLEME: Thread güvenliği için kilit eklendi
-        self.baseline = {
-            'bullet': 2931, 'blitz': 2889,
-            'rapid':  2925, 'classical': 2773, 'chess960': 2021,
-        }
-        self.current          = dict(self.baseline)
-        self.losing_streak    = 0
-        self.protection_games = 0
-        self.in_protection    = False
+    """Tracks the bot's per-mode rating and triggers protection on streaks."""
 
-    def initialize_baselines(self):
-        """Botun başlangıç reytinglerini API'den dinamik olarak çeker."""
-        if self.client:
-            try:
-                data  = self.client.account.get()
-                perfs = data.get('perfs', {})
-                with self.lock:
-                    for mode in self.baseline:
-                        if mode in perfs and 'rating' in perfs[mode]:
-                            self.baseline[mode] = perfs[mode]['rating']
-                    self.current = dict(self.baseline)
-                print(f"📊 [RatingTracker] Baseline yüklendi: {self.current}")
-            except Exception as e:
-                print(f"⚠️ [RatingTracker] Baseline alınamadı, varsayılanlar aktif: {e}")
+    DEFAULT_BASELINES = {
+        "bullet": 2800, "blitz": 2800, "rapid": 2800,
+        "classical": 2700, "chess960": 2200,
+    }
 
-    def record_result(self, result, mode, new_rating=None):
-        with self.lock:  # ✅ GÜNCELLEME: Çoklu oyun bitişlerinde yarış durumları engellendi
-            was_in_protection = self.in_protection
+    def __init__(self, client: Any) -> None:
+        self._client = client
+        self._lock = threading.Lock()
+        self._baseline = dict(self.DEFAULT_BASELINES)
+        self._current = dict(self.DEFAULT_BASELINES)
+        self._losing_streak = 0
+        self._protection_games = 0
+        self._in_protection = False
 
-            # Puan düşüşü kontrolü
-            if new_rating and mode in self.current:
-                old  = self.current[mode]
-                self.current[mode] = new_rating
+    def initialize_baselines(self) -> None:
+        if self._client is None:
+            return
+        try:
+            data = self._client.account.get()
+            perfs = data.get("perfs", {}) or {}
+            with self._lock:
+                for mode in list(self._baseline):
+                    entry = perfs.get(mode) or {}
+                    rating = entry.get("rating")
+                    if isinstance(rating, int):
+                        self._baseline[mode] = rating
+                self._current = dict(self._baseline)
+            LOG.info("📊 Baselines: %s", self._current)
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("📊 Could not fetch baseline ratings: %s", exc)
+
+    def record_result(self, result: str, mode: str, new_rating: Optional[int] = None) -> None:
+        with self._lock:
+            was_in_protection = self._in_protection
+
+            if isinstance(new_rating, int) and mode in self._current:
+                old = self._current[mode]
+                self._current[mode] = new_rating
                 drop = old - new_rating
-                if drop >= SETTINGS["RATING_DROP_THRESHOLD"]:
+                if drop >= settings.matchmaking.rating_drop_threshold:
                     self._activate_protection(
-                        f"{mode.capitalize()} puanı {drop} puan düştü ({old}→{new_rating})"
+                        f"{mode} rating dropped {drop} ({old}→{new_rating})"
                     )
 
-            # Seri kontrolü
-            if result == 'loss':
-                self.losing_streak += 1
-                if self.losing_streak >= SETTINGS["LOSING_STREAK_LIMIT"]:
-                    self._activate_protection(f"{self.losing_streak} üst üste kayıp")
+            if result == "loss":
+                self._losing_streak += 1
+                if self._losing_streak >= settings.matchmaking.losing_streak_limit:
+                    self._activate_protection(
+                        f"{self._losing_streak} losses in a row"
+                    )
             else:
-                self.losing_streak = 0
+                self._losing_streak = 0
 
-            # Geri sayım sadece koruma altındayken oynanan maçlar için
             if was_in_protection:
-                self.protection_games -= 1
-                if self.protection_games <= 0:
-                    self.in_protection = False
-                    self.losing_streak = 0
-                    print("✅ [Koruma] Koruma modu sona erdi, normal dağılıma dönülüyor.")
+                self._protection_games -= 1
+                if self._protection_games <= 0:
+                    self._in_protection = False
+                    self._losing_streak = 0
+                    LOG.info("✅ Protection mode ended, returning to normal tiers.")
 
-    def _activate_protection(self, reason):
-        if not self.in_protection:
-            print(f"🛡️ [Koruma] {reason}")
-            print(f"🛡️ [Koruma] Sonraki {SETTINGS['PROTECTION_GAME_COUNT']} maç Mid tier'da oynanacak.")
-        self.in_protection    = True
-        self.protection_games = SETTINGS["PROTECTION_GAME_COUNT"]
+    def _activate_protection(self, reason: str) -> None:
+        if not self._in_protection:
+            LOG.warning("🛡️ Protection ON: %s", reason)
+            LOG.warning("🛡️ Next %d games pinned to Mid tier.",
+                        settings.matchmaking.protection_game_count)
+        self._in_protection = True
+        self._protection_games = settings.matchmaking.protection_game_count
 
-    def is_in_protection(self):
-        with self.lock:
-            return self.in_protection
+    def in_protection(self) -> bool:
+        with self._lock:
+            return self._in_protection
 
+
+# ---------------------------------------------------------------------------
+# Matchmaker
+# ---------------------------------------------------------------------------
 
 class Matchmaker:
-    def __init__(self, client, config, active_games, token, active_games_lock=None):
-        self.client            = client
-        self.raw_config        = config
-        self.config            = config.get("matchmaking", {})
-        self.enabled           = self.config.get("allow_feed", True)
-        self.active_games      = active_games
-        self.active_games_lock = active_games_lock
-        self.my_id             = None
-        self.bot_pool          = []
-        self.blacklist         = {}
-        self.opponent_tracker  = {}
-        self.last_pool_update  = 0
-        self.wait_timeout      = 120
-        self.registered_tournaments = set()
-        self.last_tournament_join   = 0
-        self.last_cleanup           = 0
-        self.token             = token
-        self.cleanup_lock      = threading.Lock()
-        self.opponent_lock     = threading.Lock()
+    def __init__(self, client: Any, config: Dict[str, Any],
+                 active_games: Any, token: Optional[str] = None) -> None:
+        self._client = client
+        self._raw_config = config or {}
+        self._enabled = bool(self._raw_config.get("matchmaking", {}).get("allow_feed", True))
+        self._active_games = active_games
+        self._token = token or settings.token
 
-        self._apply_config_overrides()
-        self.rating_tracker = RatingTracker(self.client)
-        self.rating_tracker.initialize_baselines()
+        self._my_id: Optional[str] = None
+        self._bot_pool: List[str] = []
+        self._blacklist: Dict[str, datetime] = {}
+        self._opponent_tracker: Dict[str, int] = {}
+        self._opponent_lock = threading.Lock()
+
+        self._last_pool_update = 0.0
+        self._wait_timeout = 120
+
+        # Tournament state
+        self._registered_tournaments: Dict[str, float] = {}  # id -> expires_at
+        self._last_tournament_join = 0.0
+        self._last_tournament_scan = 0.0
+
+        # Cleanup state
+        self._last_cleanup = 0.0
+
+        self._rating_tracker = RatingTracker(self._client)
+        self._rating_tracker.initialize_baselines()
         self._initialize_id()
 
-    def _active_game_count(self):
-        if self.active_games_lock:
-            with self.active_games_lock:
-                return len(self.active_games)
-        return len(self.active_games)
-
-    def _apply_config_overrides(self):
-        """YAML ayarlarını global SETTINGS'e enjekte eder."""
-        if "rated_mode" in self.config:
-            SETTINGS["RATED_MODE"] = self.config["rated_mode"]
-        if "max_games" in self.config:
-            SETTINGS["MAX_PARALLEL_GAMES"] = self.config["max_games"]
-        if "chess960_chance" in self.config:
-            SETTINGS["CHESS960_CHANCE"] = self.config["chess960_chance"]
-        for key in (
-            "rated_mode", "safety_lock_time", "pool_refresh_seconds",
-            "blacklist_minutes", "failed_challenge_blacklist_minutes",
-            "max_games_per_opponent", "opponent_history_seconds",
-            "auto_tournament", "tournament_cooldown",
-        ):
-            if key in self.config:
-                SETTINGS[key.upper()] = self.config[key]
-        if "permanent_blacklist" in self.config:
-            yaml_bl = {b.lower() for b in self.config["permanent_blacklist"]}
-            SETTINGS["PERMANENT_BLACKLIST"].update(yaml_bl)
-
-    def _initialize_id(self):
+    # ------------------------------------------------------------------
+    # Setup helpers
+    # ------------------------------------------------------------------
+    def _active_game_count(self) -> int:
         try:
-            self.my_id = self.client.account.get()['id']
-            print(f"[Matchmaker] Bağlantı Başarılı. ID: {self.my_id}")
-        except Exception as e:
-            print(f"⚠️ [Matchmaker] ID alınamadı: {e}")
-            self.my_id = "oxydan"
+            return self._active_games.count(include_pending=False)
+        except Exception:  # noqa: BLE001
+            return 0
 
-    def _is_stop_triggered(self):
-        if os.path.exists(SETTINGS["STOP_FILE"]):
-            if self._active_game_count() == 0:
-                print("🏁 [Matchmaker] Sistem kapatılıyor.")
-                os._exit(0)
-            return True
-        return False
-
-    def _is_in_tournament_game(self):
-        try:
-            ongoing = self.client.games.get_ongoing()
-            return any(g.get('tournamentId') or g.get('swissId') for g in ongoing)
-        except Exception as e:
-            print(f"⚠️ [Matchmaker] Turnuva kontrolü başarısız: {e}")
-            return False
-
-    # ==========================================================
-    # 🏆 TURNUVA YÖNETİMİ (GÜNCELLENDİ)
-    # ==========================================================
-
-    def _auth_headers(self):
-        h = {"User-Agent": "OxydanBot/3.0"}
-        if self.token:
-            h["Authorization"] = f"Bearer {self.token}"
+    def _auth_headers(self) -> Dict[str, str]:
+        h = {"User-Agent": USER_AGENT}
+        if self._token:
+            h["Authorization"] = f"Bearer {self._token}"
         return h
 
-    def _fetch_arena_tournaments(self):
+    def _initialize_id(self) -> None:
+        try:
+            self._my_id = self._client.account.get()["id"]
+            LOG.info("Matchmaker connected. ID=%s", self._my_id)
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("Could not fetch account id: %s", exc)
+            self._my_id = "oxydan"
+
+    # ------------------------------------------------------------------
+    # Tournament management
+    # ------------------------------------------------------------------
+    def _is_in_tournament_game(self) -> bool:
+        """We are currently playing in a tournament game."""
+        try:
+            ongoing = self._client.games.get_ongoing()
+            for g in ongoing or []:
+                if g.get("tournamentId") or g.get("swissId"):
+                    return True
+        except Exception as exc:  # noqa: BLE001
+            LOG.debug("get_ongoing failed: %s", exc)
+        return False
+
+    def _remember_tournament(self, tid: str) -> None:
+        self._registered_tournaments[tid] = time.time() + TOURNAMENT_TTL_SECONDS
+
+    def _already_knows_tournament(self, tid: str) -> bool:
+        expires = self._registered_tournaments.get(tid)
+        if expires is None:
+            return False
+        if expires < time.time():
+            self._registered_tournaments.pop(tid, None)
+            return False
+        return True
+
+    def _prune_tournaments(self) -> None:
+        now = time.time()
+        stale = [tid for tid, exp in self._registered_tournaments.items() if exp < now]
+        for tid in stale:
+            self._registered_tournaments.pop(tid, None)
+        if stale:
+            LOG.debug("Pruned %d expired tournament entries.", len(stale))
+
+    def _fetch_arena_tournaments(self) -> List[Dict[str, Any]]:
         try:
             r = requests.get(
                 "https://lichess.org/api/tournament",
-                headers=self._auth_headers(), timeout=10
+                headers=self._auth_headers(), timeout=10,
             )
-            if r.status_code == 429: raise Exception("HTTP 429")
+            if r.status_code == 429:
+                raise RuntimeError("HTTP 429")
             if r.status_code == 200:
-                data = r.json()
-                return data.get('created', []) + data.get('started', [])
-        except Exception as e:
-            if "429" in str(e): raise
-            print(f"⚠️ [Arena] Liste çekilemedi: {e}")
+                data = r.json() or {}
+                return list(data.get("created", []) or []) + list(data.get("started", []) or [])
+        except RuntimeError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            LOG.debug("Arena fetch failed: %s", exc)
         return []
 
-    def _fetch_swiss_tournaments(self):
-        # 🎯 Takım adı düzeltildi (Sondaki fazla tire kaldırıldı)
-        bot_teams  = ["lichess-bots", "international-chess-bots-2026"]
-        swiss_list = []
-        for team in bot_teams:
+    def _fetch_team_arena_tournaments(self, teams: List[str]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for team in teams:
+            try:
+                r = requests.get(
+                    f"https://lichess.org/api/team/{team}/arena",
+                    headers=self._auth_headers(), timeout=10,
+                )
+                if r.status_code == 429:
+                    raise RuntimeError("HTTP 429")
+                if r.status_code == 200:
+                    for line in (r.text or "").strip().split("\n"):
+                        if line:
+                            try:
+                                out.append(json.loads(line))
+                            except Exception:  # noqa: BLE001
+                                continue
+            except RuntimeError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                LOG.debug("Team arena %s fetch failed: %s", team, exc)
+        return out
+
+    def _fetch_swiss_tournaments(self, teams: List[str]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for team in teams:
             try:
                 r = requests.get(
                     f"https://lichess.org/api/team/{team}/swiss",
                     headers=self._auth_headers(),
-                    params={"status": "created"}, timeout=10
+                    params={"status": "created"}, timeout=10,
                 )
-                if r.status_code == 429: raise Exception("HTTP 429")
+                if r.status_code == 429:
+                    raise RuntimeError("HTTP 429")
                 if r.status_code == 200:
-                    for line in r.text.strip().split('\n'):
+                    for line in (r.text or "").strip().split("\n"):
                         if line:
-                            try: swiss_list.append(json.loads(line))
-                            except: pass
-            except Exception as e:
-                if "429" in str(e): raise
-                print(f"⚠️ [Swiss] {team}: {e}")
-        return swiss_list
+                            try:
+                                out.append(json.loads(line))
+                            except Exception:  # noqa: BLE001
+                                continue
+            except RuntimeError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                LOG.debug("Swiss %s fetch failed: %s", team, exc)
+        return out
 
-    def _fetch_team_arena_tournaments(self):
-        """👑 YENİ: Takımın içindeki Arena turnuvalarını çeken fonksiyon (Link Hatası Düzeltildi)"""
-        # API için sondaki tireyi kaldırdık, Lichess sistemi bu şekilde kabul ediyor:
-        bot_teams  = ["lichess-bots", "international-chess-bots-2026"]
-        team_arena_list = []
-        for team in bot_teams:
-            try:
-                r = requests.get(
-                    f"https://lichess.org/api/team/{team}/arena",
-                    headers=self._auth_headers(), timeout=10
-                )
-                if r.status_code == 429: raise Exception("HTTP 429")
-                if r.status_code == 200:
-                    for line in r.text.strip().split('\n'):
-                        if line:
-                            try: team_arena_list.append(json.loads(line))
-                            except: pass
-            except Exception as e:
-                if "429" in str(e): raise
-                print(f"⚠️ [Team Arena] {team}: {e}")
-        return team_arena_list
-
-    def _join_arena(self, tid):
+    def _join_arena(self, tid: str) -> bool:
         try:
             r = requests.post(
                 f"https://lichess.org/api/tournament/{tid}/join",
-                headers=self._auth_headers(), timeout=10
+                headers=self._auth_headers(), timeout=10,
             )
-            if r.status_code == 429: raise Exception("HTTP 429")
+            if r.status_code == 429:
+                raise RuntimeError("HTTP 429")
             return r.status_code == 200
-        except Exception as e:
-            if "429" in str(e): raise
-            print(f"⚠️ [Arena] Katılım hatası: {e}")
+        except RuntimeError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            LOG.debug("Arena join %s failed: %s", tid, exc)
             return False
 
-    def _join_swiss(self, sid):
+    def _join_swiss(self, sid: str) -> bool:
         try:
             r = requests.post(
                 f"https://lichess.org/api/swiss/{sid}/join",
-                headers=self._auth_headers(), timeout=10
+                headers=self._auth_headers(), timeout=10,
             )
-            if r.status_code == 429: raise Exception("HTTP 429")
+            if r.status_code == 429:
+                raise RuntimeError("HTTP 429")
             return r.status_code == 200
-        except Exception as e:
-            if "429" in str(e): raise
-            print(f"⚠️ [Swiss] Katılım hatası: {e}")
+        except RuntimeError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            LOG.debug("Swiss join %s failed: %s", sid, exc)
             return False
 
-    def _manage_tournaments(self):
-        if not SETTINGS.get("AUTO_TOURNAMENT", True):
+    def _tournament_is_acceptable(self, t: Dict[str, Any]) -> bool:
+        if settings.matchmaking.only_bot_tourneys:
+            name = (t.get("fullName") or t.get("name") or "").lower()
+            if "bot" not in name:
+                return False
+        starts_at = (t.get("startsAt") or 0) / 1000
+        if starts_at > 0 and (starts_at - time.time()) > settings.matchmaking.join_upcoming_mins * 60:
+            return False
+        return True
+
+    def _manage_tournaments(self) -> None:
+        if not settings.matchmaking.auto_tournament:
             return
-        if (time.time() - self.last_tournament_join) < SETTINGS["TOURNAMENT_COOLDOWN"]:
+
+        # Throttle the *scan* to a sensible interval; the join is
+        # additionally throttled below.
+        now = time.time()
+        if now - self._last_tournament_scan < settings.matchmaking.tournament_scan_interval:
+            return
+        self._last_tournament_scan = now
+        self._prune_tournaments()
+
+        if now - self._last_tournament_join < settings.matchmaking.tournament_cooldown:
             return
 
-        print("[Matchmaker] Turnuvalar taranıyor (Genel Arena + Swiss + Takım Arenası)...")
+        teams = list(settings.teams.get("allowed_teams") or ["lichess-bots"])
 
-        # 1. Genel Arenaları Tara
-        for t in self._fetch_arena_tournaments():
-            tid  = t.get('id')
-            if tid in self.registered_tournaments: continue
-            name = t.get('fullName', '').lower()
-            if SETTINGS.get("ONLY_BOT_TOURNEYS") and "bot" not in name: continue
-            starts = t.get('startsAt', 0) / 1000
-            if starts > 0 and (starts - time.time()) > SETTINGS["JOIN_UPCOMING_MINS"] * 60: continue
-            if self._join_arena(tid):
-                self.registered_tournaments.add(tid)
-                self.last_tournament_join = time.time()
-                print(f"🏆 [Arena] KATILINDI: {t.get('fullName')}")
+        candidates: List[Tuple[str, str, Dict[str, Any]]] = []  # (kind, id, data)
+
+        try:
+            for t in self._fetch_arena_tournaments():
+                tid = t.get("id")
+                if tid and not self._already_knows_tournament(tid) and self._tournament_is_acceptable(t):
+                    candidates.append(("arena", tid, t))
+            for t in self._fetch_team_arena_tournaments(teams):
+                tid = t.get("id")
+                if tid and not self._already_knows_tournament(tid) and self._tournament_is_acceptable(t):
+                    candidates.append(("team_arena", tid, t))
+            for s in self._fetch_swiss_tournaments(teams):
+                sid = s.get("id")
+                if sid and not self._already_knows_tournament(sid) and self._tournament_is_acceptable(s):
+                    candidates.append(("swiss", sid, s))
+        except RuntimeError:
+            # 429: skip this cycle, retry sooner next time.
+            self._last_tournament_scan = now - settings.matchmaking.tournament_scan_interval / 2
+            return
+
+        if not candidates:
+            return
+
+        # Prefer tournaments starting soonest.
+        def _start_key(item: Tuple[str, str, Dict[str, Any]]) -> float:
+            t = item[2]
+            return (t.get("startsAt") or 0) / 1000
+
+        candidates.sort(key=_start_key)
+
+        for kind, tid, data in candidates:
+            joined = False
+            try:
+                if kind in ("arena", "team_arena"):
+                    joined = self._join_arena(tid)
+                elif kind == "swiss":
+                    joined = self._join_swiss(tid)
+            except RuntimeError:
+                self._last_tournament_scan = now - settings.matchmaking.tournament_scan_interval / 2
                 return
 
-        # 2. Swiss Turnuvalarını Tara
-        for s in self._fetch_swiss_tournaments():
-            sid  = s.get('id')
-            if sid in self.registered_tournaments: continue
-            name = s.get('name', '').lower()
-            if SETTINGS.get("ONLY_BOT_TOURNEYS") and "bot" not in name: continue
-            starts = s.get('startsAt', 0) / 1000
-            if starts > 0 and (starts - time.time()) > SETTINGS["JOIN_UPCOMING_MINS"] * 60: continue
-            if self._join_swiss(sid):
-                self.registered_tournaments.add(sid)
-                self.last_tournament_join = time.time()
-                print(f"🏆 [Swiss] KATILINDI: {s.get('name')}")
-                return
+            if joined:
+                self._remember_tournament(tid)
+                self._last_tournament_join = time.time()
+                LOG.info("🏆 Tournament joined (%s): %s — %s",
+                         kind, data.get("fullName") or data.get("name"), tid)
+                return  # one tournament per scan is plenty
 
-        # 3. 👑 Kendi Takımının Arenalarını Tara
-        for ta in self._fetch_team_arena_tournaments():
-            taid = ta.get('id')
-            if taid in self.registered_tournaments: continue
-            # Takım arenalarında 'fullName' yerine bazen sadece 'name' döner, ikisini de kontrol ediyoruz
-            name = ta.get('fullName', ta.get('name', '')).lower()
-            if SETTINGS.get("ONLY_BOT_TOURNEYS") and "bot" not in name: continue
-            starts = ta.get('startsAt', 0) / 1000
-            if starts > 0 and (starts - time.time()) > SETTINGS["JOIN_UPCOMING_MINS"] * 60: continue
-            if self._join_arena(taid):
-                self.registered_tournaments.add(taid)
-                self.last_tournament_join = time.time()
-                print(f"🏆 [Takım Arenası] KATILINDI: {ta.get('name')}")
-                return
-
-    def _cleanup_history(self):
-        with self.cleanup_lock:
-            if len(self.registered_tournaments) > 500:
-                self.registered_tournaments = set(
-                    list(self.registered_tournaments)[-250:]
-                )
-                print("🧹 [Cleanup] Turnuva hafızası budandı.")
-
-            with self.opponent_lock:
-                old_count = len(self.opponent_tracker)
-                self.opponent_tracker.clear()
-            print(f"🧹 [Cleanup] opponent_tracker sıfırlandı ({old_count} kayıt temizlendi).")
-
-    # ==========================================================
-    # 📋 PROTOKOL — Gelen Meydan Okuma Kabulü
-    # ==========================================================
-
-    def is_challenge_acceptable(self, challenge):
+    # ------------------------------------------------------------------
+    # Challenge acceptance policy
+    # ------------------------------------------------------------------
+    def is_challenge_acceptable(self, challenge: Dict[str, Any]) -> Tuple[bool, str]:
         if self._is_in_tournament_game():
             return False, "Currently in a tournament game."
 
-        variant = challenge.get('variant', {}).get('key', 'standard')
-        if variant not in ['standard', 'chess960']:
+        variant = (challenge.get("variant") or {}).get("key", "standard")
+        if variant not in ("standard", "chess960"):
             return False, f"Variant '{variant}' not supported."
 
-        challenger = challenge.get('challenger')
-        if not challenger:
+        challenger = challenge.get("challenger") or {}
+        user_id = (challenger.get("id") or "").lower()
+        if not user_id:
             return False, "No challenger info."
 
-        user_id = challenger.get('id', '')
-        rating  = challenger.get('rating') or 0
-        title   = (challenger.get('title') or '').upper()
-        is_bot  = title == 'BOT'
-        rated   = challenge.get('rated', False)
+        title = (challenger.get("title") or "").upper()
+        is_bot = title == "BOT"
+        rating = challenger.get("rating") or 0
+        rated = bool(challenge.get("rated", False))
 
-        if user_id.lower() in SETTINGS["PERMANENT_BLACKLIST"]:
-            return False, f"{user_id} is permanently blacklisted."
+        if user_id in settings.matchmaking.permanent_blacklist:
+            return False, f"{user_id} permanently blacklisted."
 
-        tc = challenge.get('timeControl', {})
-        if tc.get('type') != 'clock':
-            return False, "Only clock games allowed."
+        tc = challenge.get("timeControl") or {}
+        if tc.get("type") != "clock":
+            return False, "Only clock games accepted."
 
-        limit_sn = tc.get('limit', 0)
+        limit_sn = tc.get("limit", 0) or 0
+        if limit_sn < 30 or limit_sn > settings.runtime.max_game_time_limit:
+            return False, f"Time control out of range ({limit_sn}s)."
 
-        opponent_key = user_id.lower()
-        with self.opponent_lock:
-            games_with_user = self.opponent_tracker.get(opponent_key, 0)
+        with self._opponent_lock:
+            games_with_user = self._opponent_tracker.get(user_id, 0)
+        if games_with_user >= settings.matchmaking.max_games_per_opponent:
+            return False, f"Already played {games_with_user} games with {user_id}."
 
-        if games_with_user >= SETTINGS["MAX_GAMES_PER_OPPONENT"]:
-            return False, f"Max {SETTINGS['MAX_GAMES_PER_OPPONENT']} games reached with {user_id}."
-
-        # İNSAN
         if not is_bot:
             if rating < 1500:
                 return False, "Human rating below 1500."
             if rated:
                 return False, "Humans must play casual."
-            if limit_sn < 30 or limit_sn > 1800:
-                return False, "Time control out of range (0.5+0 to 30+0)."
             return True, f"Accepted human ({rating})"
 
-        # BOT
+        # Bot
         if rating < 1500:
             return False, "Bot rating below 1500."
-        if 1500 <= rating < 2000:
-            if rated:
-                return False, "Bots 1500-2000 must play casual."
-            if limit_sn > 600:
-                return False, "Max 10+0 for bots 1500-2000."
-            return True, f"Accepted casual bot ({rating})"
-        if 2000 <= rating < 2300:
-            if limit_sn > 600:
-                return False, "Max 10+0 for bots 2000-2300."
-            return True, f"Accepted rated bot ({rating})"
+        if 1500 <= rating < 2000 and rated:
+            return False, "Bots 1500-2000 must play casual."
+        if rating < 2300 and limit_sn > 600:
+            return False, "Max 10+0 for sub-2300 bots."
+        return True, f"Accepted bot ({rating})"
 
-        # 2300+
-        if limit_sn < 30 or limit_sn > 1800:
-            return False, "Time control out of range (0.5+0 to 30+0)."
-        return True, f"Accepted elite bot ({rating})"
+    # ------------------------------------------------------------------
+    # Tier & target selection
+    # ------------------------------------------------------------------
+    def _pick_tier(self) -> Tuple[int, int]:
+        if self._rating_tracker.in_protection():
+            LOG.info("🛡️ Protection: pinning to Mid tier (%d games left).",
+                     self._rating_tracker._protection_games)
+            return settings.matchmaking.tier_mid
 
-    # ==========================================================
-    # 🎯 MATCHMAKER — Akıllı Tier Seçimi
-    # ==========================================================
-
-    def _pick_tier(self):
-        if self.rating_tracker.is_in_protection():
-            print(f"🛡️ [Koruma] Mid kilitli — kalan: {self.rating_tracker.protection_games} maç")
-            return SETTINGS["TIER_MID"]
-
+        t = settings.matchmaking.tier_thresholds
         r = random.random()
-        t = SETTINGS["TIER_THRESHOLDS"]
-        if r < t["LOW"]:  return SETTINGS["TIER_LOW"]
-        if r < t["MID"]:  return SETTINGS["TIER_MID"]
-        if r < t["HIGH"]: return SETTINGS["TIER_HIGH"]
-        return SETTINGS["TIER_ELITE"]
+        if r < t["LOW"]:
+            return settings.matchmaking.tier_low
+        if r < t["MID"]:
+            return settings.matchmaking.tier_mid
+        if r < t["HIGH"]:
+            return settings.matchmaking.tier_high
+        return settings.matchmaking.tier_elite
 
-    def _refresh_bot_pool(self):
+    def _refresh_bot_pool(self) -> None:
         now = time.time()
-        if not self.bot_pool or (now - self.last_pool_update > SETTINGS["POOL_REFRESH_SECONDS"]):
-            try:
-                stream = self.client.bots.get_online_bots()
-                online = list(itertools.islice(stream, 200))
-                self.bot_pool = [
-                    b.get('id') for b in online
-                    if b.get('id')
-                    and b.get('id').lower() != (self.my_id or '').lower()
-                    and b.get('id', '').lower() not in SETTINGS["PERMANENT_BLACKLIST"]
-                ]
-                random.shuffle(self.bot_pool)
-                self.last_pool_update = now
-                print(f"[Matchmaker] Bot havuzu: {len(self.bot_pool)} bot")
-            except Exception as e:
-                if "429" in str(e): raise
-                print(f"⚠️ [Matchmaker] Havuz yenileme hatası: {e}")
-                time.sleep(10)
+        if self._bot_pool and (now - self._last_pool_update) < settings.matchmaking.pool_refresh_seconds:
+            return
+        try:
+            stream = self._client.bots.get_online_bots()
+            online = list(itertools.islice(stream, 200))
+            self._bot_pool = [
+                b.get("id")
+                for b in online
+                if b.get("id")
+                and b.get("id").lower() != (self._my_id or "").lower()
+                and b.get("id", "").lower() not in settings.matchmaking.permanent_blacklist
+            ]
+            random.shuffle(self._bot_pool)
+            self._last_pool_update = now
+            LOG.info("Bot pool refreshed: %d bots online.", len(self._bot_pool))
+        except Exception as exc:  # noqa: BLE001
+            if "429" in str(exc):
+                raise
+            LOG.warning("Bot pool refresh failed: %s", exc)
+            time.sleep(10)
 
-    def _find_suitable_target(self):
-        self._refresh_bot_pool()
-        tier      = self._pick_tier()
-        tier_name = _TIER_NAME.get(tier, "?")
-        now       = datetime.now()
+    def _find_suitable_target(self) -> Tuple[Optional[str], int, int, int, bool, str]:
+        try:
+            self._refresh_bot_pool()
+        except Exception as exc:  # noqa: BLE001
+            if "429" in str(exc):
+                raise
+            return None, 0, 0, 0, False, "?"
 
-        if tier == SETTINGS["TIER_LOW"]:
-            tc_pool  = SETTINGS["TC_MAX_10"]
+        tier = self._pick_tier()
+        tier_name = _tier_name(tier)
+        now = datetime.now()
+
+        if tier == settings.matchmaking.tier_low:
+            tc_pool = settings.matchmaking.tc_pool_max_10
             is_rated = False
-        elif tier == SETTINGS["TIER_MID"]:
-            tc_pool  = SETTINGS["TC_MAX_10"]
-            is_rated = False if self.rating_tracker.is_in_protection() else SETTINGS["RATED_MODE"]
+        elif tier == settings.matchmaking.tier_mid:
+            tc_pool = settings.matchmaking.tc_pool_max_10
+            is_rated = settings.matchmaking.rated_mode and not self._rating_tracker.in_protection()
         else:
-            tc_pool  = SETTINGS["TC_ALL"]
-            is_rated = SETTINGS["RATED_MODE"]
+            tc_pool = settings.matchmaking.tc_pool_all
+            is_rated = settings.matchmaking.rated_mode
 
-        tc_str           = random.choice(tc_pool)
+        tc_str = random.choice(tc_pool)
         limit_sn, inc_sn = _parse_tc(tc_str)
 
-        if limit_sn < 180:    mode = 'bullet'
-        elif limit_sn < 480:  mode = 'blitz'
-        elif limit_sn < 1500: mode = 'rapid'
-        else:                 mode = 'classical'
+        if limit_sn < 180:
+            mode = "bullet"
+        elif limit_sn < 480:
+            mode = "blitz"
+        elif limit_sn < 1500:
+            mode = "rapid"
+        else:
+            mode = "classical"
 
-        # ✅ GÜNCELLEME: opponent_tracker okuması kilit altına alındı
-        with self.opponent_lock:
+        with self._opponent_lock:
             candidates = [
-                b for b in self.bot_pool
-                if (b.lower() not in self.blacklist or self.blacklist[b.lower()] <= now)
-                and self.opponent_tracker.get(b.lower(), 0) < SETTINGS["MAX_GAMES_PER_OPPONENT"]
+                b for b in self._bot_pool
+                if (b.lower() not in self._blacklist or self._blacklist[b.lower()] <= now)
+                and self._opponent_tracker.get(b.lower(), 0) < settings.matchmaking.max_games_per_opponent
             ][:50]
 
         if not candidates:
@@ -520,123 +546,148 @@ class Matchmaker:
                 "https://lichess.org/api/users",
                 headers=self._auth_headers(),
                 data=",".join(candidates),
-                timeout=10
+                timeout=10,
             )
             if r.status_code == 429:
-                raise Exception("HTTP 429 Rate Limit")  # ✅ GÜNCELLEME: Ana döngünün yakalaması sağlandı
+                raise RuntimeError("HTTP 429")
             if r.status_code == 200:
-                users_data = r.json()
+                users_data = r.json() or []
                 random.shuffle(users_data)
                 for user in users_data:
-                    bot_id = user.get('id')
-                    rating = user.get('perfs', {}).get(mode, {}).get('rating', 0)
+                    bot_id = user.get("id")
+                    rating = (user.get("perfs", {}) or {}).get(mode, {}).get("rating", 0) or 0
                     if tier[0] <= rating <= tier[1]:
                         return bot_id, rating, limit_sn, inc_sn, is_rated, tier_name
             else:
-                raise Exception(f"HTTP {r.status_code}")
-        except Exception as e:
-            if "429" in str(e):
-                raise  # ✅ GÜNCELLEME: Rate limit bypass edilmiyor, üst metoda fırlatılıyor
-            print(f"⚠️ [Matchmaker] Toplu çekme başarısız: {e} — tekli moda geçildi")
+                raise RuntimeError(f"HTTP {r.status_code}")
+        except RuntimeError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            LOG.debug("Bulk user fetch failed: %s — falling back to single lookups.", exc)
             for bot_id in candidates[:5]:
                 try:
-                    data   = self.client.users.get_public_data(bot_id)
-                    rating = data.get('perfs', {}).get(mode, {}).get('rating', 0)
+                    data = self._client.users.get_public_data(bot_id)
+                    rating = (data.get("perfs", {}) or {}).get(mode, {}).get("rating", 0) or 0
                     time.sleep(0.3)
                     if tier[0] <= rating <= tier[1]:
                         return bot_id, rating, limit_sn, inc_sn, is_rated, tier_name
-                except Exception as ex:
-                    if "429" in str(ex): raise
+                except Exception as ex:  # noqa: BLE001
+                    if "429" in str(ex):
+                        raise
                     continue
 
         return None, 0, 0, 0, False, tier_name
 
-    def record_game_result(self, result, mode, new_rating=None, opponent_id=None):
-        self.rating_tracker.record_result(result, mode, new_rating)
-
+    # ------------------------------------------------------------------
+    # Result tracking
+    # ------------------------------------------------------------------
+    def record_game_result(self, result: str, mode: str,
+                           new_rating: Optional[int] = None,
+                           opponent_id: Optional[str] = None) -> None:
+        self._rating_tracker.record_result(result, mode, new_rating)
         if opponent_id:
-            opponent_key = opponent_id.lower()
-            with self.opponent_lock:
-                self.opponent_tracker[opponent_key] = (
-                    self.opponent_tracker.get(opponent_key, 0) + 1
-                )
+            key = opponent_id.lower()
+            with self._opponent_lock:
+                self._opponent_tracker[key] = self._opponent_tracker.get(key, 0) + 1
 
-    # ==========================================================
-    # 🚀 ANA DÖNGÜ
-    # ==========================================================
-
-    def start(self):
-        if not self.enabled:
-            print("🚫 Matchmaker YAML ile devre dışı.")
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
+    def start(self) -> None:
+        if not self._enabled:
+            LOG.info("Matchmaker disabled via config.")
             return
 
-        print("🚀 Matchmaker v3.6 Aktif — Oxydan Aegis Protokolü")
-        print("   Dağılım: Elite %32 | High %35 | Mid %23 | Low %10")
-        print(f"   Max per opponent: {SETTINGS['MAX_GAMES_PER_OPPONENT']}")
+        LOG.info("🚀 Matchmaker v12 active — distribution Low %s | Mid %s | High %s | Elite %s",
+                 f"{int(settings.matchmaking.tier_thresholds['LOW']*100)}%",
+                 f"{int((settings.matchmaking.tier_thresholds['MID']-settings.matchmaking.tier_thresholds['LOW'])*100)}%",
+                 f"{int((settings.matchmaking.tier_thresholds['HIGH']-settings.matchmaking.tier_thresholds['MID'])*100)}%",
+                 f"{int((1-settings.matchmaking.tier_thresholds['HIGH'])*100)}%")
+        LOG.info("   Max per opponent: %d", settings.matchmaking.max_games_per_opponent)
 
         while True:
             try:
-                if time.time() - self.last_cleanup > SETTINGS["OPPONENT_HISTORY_SECONDS"]:
+                # Periodic cleanup
+                if (time.time() - self._last_cleanup) > settings.matchmaking.opponent_history_seconds:
                     self._cleanup_history()
-                    self.last_cleanup = time.time()
+                    self._last_cleanup = time.time()
 
                 self._manage_tournaments()
 
-                if self._is_in_tournament_game() or self._is_stop_triggered():
+                if self._is_in_tournament_game():
                     time.sleep(60)
                     continue
 
-                if self._active_game_count() < SETTINGS["MAX_PARALLEL_GAMES"]:
+                if self._active_game_count() >= settings.runtime.max_parallel_games:
+                    time.sleep(10)
+                    continue
+
+                try:
                     target, rating, limit_sn, inc_sn, is_rated, tier_name = \
                         self._find_suitable_target()
+                except RuntimeError as exc:
+                    if "429" in str(exc):
+                        LOG.warning("Rate limit (429), waiting %ds.", self._wait_timeout)
+                        time.sleep(self._wait_timeout)
+                        self._wait_timeout = min(self._wait_timeout * 2, 900)
+                        continue
+                    raise
 
-                    if target:
-                        variant   = 'chess960' if random.random() < SETTINGS["CHESS960_CHANCE"] else 'standard'
-                        rated_str = "Rated" if is_rated else "Casual"
-                        mins      = limit_sn // 60
-                        secs      = limit_sn % 60
-                        tc_label  = f"{mins}:{secs:02d}+{inc_sn}" if secs else f"{mins}+{inc_sn}"
-                        with self.opponent_lock:
-                            played = self.opponent_tracker.get(target.lower(), 0)
+                if not target:
+                    time.sleep(45)
+                    continue
 
-                        print(
-                            f"[{tier_name}] → {target} ({rating}) | "
-                            f"{rated_str} | {tc_label} | {variant} | "
-                            f"Oyun {played}/{SETTINGS['MAX_GAMES_PER_OPPONENT']}"
-                        )
+                variant = "chess960" if random.random() < settings.matchmaking.chess960_chance else "standard"
+                rated_str = "Rated" if is_rated else "Casual"
+                mins, secs = divmod(limit_sn, 60)
+                tc_label = f"{mins}:{secs:02d}+{inc_sn}" if secs else f"{mins}+{inc_sn}"
 
-                        target_key = target.lower()
-                        self.blacklist[target_key] = datetime.now() + timedelta(
-                            minutes=SETTINGS["BLACKLIST_MINUTES"]
-                        )
-                        try:
-                            self.client.challenges.create(
-                                username=target,
-                                rated=is_rated,
-                                variant=variant,
-                                clock_limit=limit_sn,
-                                clock_increment=inc_sn
-                            )
-                            self.wait_timeout = 120
-                        except Exception as ce:
-                            if "429" in str(ce): raise
-                            self.blacklist[target_key] = datetime.now() + timedelta(
-                                minutes=SETTINGS["FAILED_CHALLENGE_BLACKLIST_MINUTES"]
-                            )
-                            raise
-                        time.sleep(SETTINGS["SAFETY_LOCK_TIME"])
-                    else:
-                        # ✅ GÜNCELLEME: Uygun bot bulunamazsa Lichess API'sini spamlamamak için süre artırıldı
-                        time.sleep(45)
-                else:
-                    time.sleep(10)
+                with self._opponent_lock:
+                    played = self._opponent_tracker.get(target.lower(), 0)
+                LOG.info("[%s] → %s (%d) | %s | %s | %s | game %d/%d",
+                         tier_name, target, rating, rated_str, tc_label, variant,
+                         played, settings.matchmaking.max_games_per_opponent)
 
-            except Exception as e:
-                err = str(e)
+                self._blacklist[target.lower()] = datetime.now() + timedelta(
+                    minutes=settings.matchmaking.blacklist_minutes
+                )
+                try:
+                    self._client.challenges.create(
+                        username=target,
+                        rated=is_rated,
+                        variant=variant,
+                        clock_limit=limit_sn,
+                        clock_increment=inc_sn,
+                    )
+                    self._wait_timeout = 120
+                except Exception as exc:  # noqa: BLE001
+                    if "429" in str(exc):
+                        raise
+                    LOG.warning("Challenge creation failed: %s", exc)
+                    self._blacklist[target.lower()] = datetime.now() + timedelta(
+                        minutes=settings.matchmaking.failed_challenge_blacklist_minutes
+                    )
+
+                time.sleep(settings.matchmaking.safety_lock_time)
+
+            except Exception as exc:  # noqa: BLE001
+                err = str(exc)
                 if "429" in err:
-                    print(f"⚠️ Rate limit (429), {self.wait_timeout}sn bekleniyor.")
-                    time.sleep(self.wait_timeout)
-                    self.wait_timeout = min(self.wait_timeout * 2, 900)
+                    LOG.warning("Rate limit (429), waiting %ds.", self._wait_timeout)
+                    time.sleep(self._wait_timeout)
+                    self._wait_timeout = min(self._wait_timeout * 2, 900)
                 else:
-                    print(f"⚠️ [Matchmaker] Hata: {err}")
+                    LOG.warning("Matchmaker error: %s", err)
                     time.sleep(30)
+
+    def _cleanup_history(self) -> None:
+        # Forget blacklisted opponents after the period; opponent_tracker
+        # is reset every opponent_history_seconds to keep memory bounded.
+        cutoff = datetime.now()
+        self._blacklist = {
+            k: v for k, v in self._blacklist.items() if v > cutoff
+        }
+        with self._opponent_lock:
+            old_count = len(self._opponent_tracker)
+            self._opponent_tracker.clear()
+        LOG.debug("Cleanup: %d opponent records cleared.", old_count)

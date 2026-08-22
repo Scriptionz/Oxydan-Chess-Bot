@@ -2,75 +2,77 @@ name: Oxydan Lichess Bot
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false # ✅ DÜZELTİLMEDİ: Maç ortasında botun aniden öldürülüp ban yememesi için false yapıldı
+  cancel-in-progress: false  # Never kill a bot mid-game — Lichess will ban.
 
 on:
-  workflow_dispatch: # Manuel başlatma
+  workflow_dispatch:        # Manual launch
   schedule:
-    - cron: '0 */6 * * *' # Her 6 saatte bir otomatik başlar
+    - cron: '0 */6 * * *'   # Auto-launch every 6 hours
+
+env:
+  PYTHONIOENCODING: utf-8
+  OXYDAN_LOG_LEVEL: INFO
+  # Set to 1 if you want full berserk debug logging.
+  OXYDAN_VERBOSE_BERSERK: "0"
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     steps:
-      - name: Kodlari Cek
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Python Kurulumu
+      - name: Python setup
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Cerebellum Kitabini Indir ve Kur
+      - name: Download opening book
         run: |
-          echo "📚 Devasa açılış kitabı indiriliyor..."
+          echo "📚 Downloading Cerebellum opening book..."
           curl -L "https://github.com/Scriptionz/Oxydan-Chess-Bot/releases/download/v1_Book/Cerebellum3Merge.zip" -o book.zip
-          echo "📂 ZIP'ten çıkarılıyor..."
           unzip -o book.zip
           mv Cerebellum3Merge.bin book.bin
-          echo "✅ Kitap hazır: $(ls -lh book.bin)"
+          echo "✅ Book ready: $(ls -lh book.bin)"
 
-      - name: Kutuphaneleri Kur
-        run: |
-          pip install -r requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
-      # ✅ OPTİMİZASYON: Her 6 saatte bir sıfırdan derlememek için motoru önbelleğe alıyoruz
-      - name: Motor Cache Kontrolü
+      - name: Engine cache check
         id: cache-engine
         uses: actions/cache@v4
         with:
           path: src/Ethereal
           key: ${{ runner.os }}-ethereal-${{ hashFiles('src/*.c', 'src/*.h') }}
 
-      - name: Motoru Derle (Orijinal Klasik Güçlü Mod)
-        if: steps.cache-engine.outputs.cache-hit != 'true' # Sadece cache yoksa derler
+      - name: Compile engine
+        if: steps.cache-engine.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential clang
           cd src
           rm -f Ethereal dummy.nnue 2>/dev/null || true
-          echo "🚀 Orijinal ayarlarla (NNUE=0) motor derleniyor..."
+          echo "🚀 Compiling Ethereal (NNUE=0)..."
           clang -O3 -std=gnu11 -Wall -Wextra -DNDEBUG -flto -DUSE_NNUE=0 -march=native *.c pyrrhic/tbprobe.c -lpthread -lm -o Ethereal
           if [ -f Ethereal ]; then
             chmod +x Ethereal
-            echo "✅ Motor başarıyla derlendi."
+            echo "✅ Engine compiled."
           else
-            echo "❌ Derleme başarısız!"
+            echo "❌ Compilation failed."
             exit 1
           fi
           cd ..
 
-      - name: Oxydan V11 Pre-Flight Diagnostics (Gelişmiş Teşhis)
+      - name: Pre-flight self-test
         run: |
           chmod +x ./src/Ethereal
-          python check_bot.py
+          python lichess-bot.py --self-test
 
-      - name: Botu Baslat
+      - name: Launch bot
         env:
           LICHESS_TOKEN: ${{ secrets.LICHESS_TOKEN }}
         run: |
-          # ✅ DÜZELTİLMEDİ: Özel karakter barındıran tokenların sed komutunu kırmasını engelleyen güvenli Python yöntemi
-          python -c "import os; text = open('config.yml').read().replace('\$LICHESS_TOKEN', os.environ['LICHESS_TOKEN']); open('config.yml', 'w').write(text)" || echo "Config hatasi!"
-          
-          # Botu başlat
+          # Substitute $LICHESS_TOKEN placeholder. Python is used here so
+          # tokens with special characters don't break sed.
+          python -c "import os; text = open('config.yml').read().replace('\$LICHESS_TOKEN', os.environ['LICHESS_TOKEN']); open('config.yml', 'w').write(text)"
           python -u lichess-bot.py

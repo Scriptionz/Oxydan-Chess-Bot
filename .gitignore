@@ -1,2 +1,29 @@
-*.json
-*.exe
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Runtime data
+STOP.txt
+oxydan_learn.json
+
+# Engine build artifacts
+src/Ethereal
+src/*.o
+src/dummy.nnue
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Local config (keep config.yml but ignore secrets)
+.env
+.env.local

@@ -16,6 +16,9 @@ Major changes vs the previous version:
   rating rather than a hard-coded baseline.
 * All public methods log to the same ``oxydan`` logger so a fork
   author can grep the GitHub Actions output for one trace.
+* 429 rate-limit handling is consistent: 300s ceiling, resets on
+  success, and forces a 5-minute hard cooldown after 5 consecutive
+  rate limits to avoid being stuck in exponential backoff forever.
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ import random
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -38,15 +41,24 @@ LOG = logging.getLogger("oxydan.matchmaker")
 USER_AGENT = f"OxydanBot/12.0 (+https://github.com/Scriptionz/Oxydan-Chess-Bot)"
 TOURNAMENT_TTL_SECONDS = 12 * 3600  # forget a tournament after 12h
 
+# Rate-limit policy
+WAIT_TIMEOUT_INITIAL = 30      # starting wait after a 429
+WAIT_TIMEOUT_CEILING = 300     # 5-minute hard cap
+CONSECUTIVE_429_LIMIT = 5      # 5 in a row → 5-minute hard sleep
+CONSECUTIVE_429_HARD_SLEEP = 300
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _parse_tc(tc_str: str) -> Tuple[int, int]:
+    """Parse 'X+Y' as X minutes + Y seconds increment (Lichess standard).
+    Plain 'N' is treated as N seconds for backwards compatibility with v11.
+    """
     if "+" in tc_str:
         base, inc = tc_str.split("+", 1)
-        return int(base), int(inc)
+        return int(base) * 60, int(inc)
     return int(tc_str), 0
 
 
@@ -100,7 +112,8 @@ class RatingTracker:
         except Exception as exc:  # noqa: BLE001
             LOG.warning("📊 Could not fetch baseline ratings: %s", exc)
 
-    def record_result(self, result: str, mode: str, new_rating: Optional[int] = None) -> None:
+    def record_result(self, result: str, mode: str,
+                      new_rating: Optional[int] = None) -> None:
         with self._lock:
             was_in_protection = self._in_protection
 
@@ -141,6 +154,10 @@ class RatingTracker:
         with self._lock:
             return self._in_protection
 
+    def protection_games_left(self) -> int:
+        with self._lock:
+            return self._protection_games
+
 
 # ---------------------------------------------------------------------------
 # Matchmaker
@@ -151,7 +168,9 @@ class Matchmaker:
                  active_games: Any, token: Optional[str] = None) -> None:
         self._client = client
         self._raw_config = config or {}
-        self._enabled = bool(self._raw_config.get("matchmaking", {}).get("allow_feed", True))
+        self._enabled = bool(
+            self._raw_config.get("matchmaking", {}).get("allow_feed", True)
+        )
         self._active_games = active_games
         self._token = token or settings.token
 
@@ -159,10 +178,14 @@ class Matchmaker:
         self._bot_pool: List[str] = []
         self._blacklist: Dict[str, datetime] = {}
         self._opponent_tracker: Dict[str, int] = {}
-        self._opponent_lock = threading.Lock()
 
-        self._last_pool_update = 0.0
-        self._wait_timeout = 120
+        # All shared state guarded by these locks
+        self._opponent_lock = threading.Lock()     # _bot_pool, _blacklist, _opponent_tracker
+        self._state_lock = threading.Lock()         # _wait_timeout, _consecutive_429, tournament timers
+
+        # Rate-limit / 429 tracking
+        self._wait_timeout = WAIT_TIMEOUT_INITIAL
+        self._consecutive_429 = 0
 
         # Tournament state
         self._registered_tournaments: Dict[str, float] = {}  # id -> expires_at
@@ -199,6 +222,34 @@ class Matchmaker:
             LOG.warning("Could not fetch account id: %s", exc)
             self._my_id = "oxydan"
 
+    def _reset_429_counter(self) -> None:
+        """Call after any successful API interaction to clear the rate-limit debt."""
+        with self._state_lock:
+            if self._consecutive_429 or self._wait_timeout != WAIT_TIMEOUT_INITIAL:
+                LOG.debug("Matchmaker: reset rate-limit state after success")
+            self._consecutive_429 = 0
+            self._wait_timeout = WAIT_TIMEOUT_INITIAL
+
+    def _bump_429(self) -> None:
+        """Apply exponential backoff after a 429, with a hard reset after N consecutive hits."""
+        with self._state_lock:
+            self._wait_timeout = min(self._wait_timeout * 2, WAIT_TIMEOUT_CEILING)
+            wait_s = self._wait_timeout
+            self._consecutive_429 += 1
+            n = self._consecutive_429
+        if n >= CONSECUTIVE_429_LIMIT:
+            LOG.warning(
+                "Rate limit (429) — %d consecutive, hard-sleeping %ds then resetting.",
+                n, CONSECUTIVE_429_HARD_SLEEP,
+            )
+            time.sleep(CONSECUTIVE_429_HARD_SLEEP)
+            with self._state_lock:
+                self._consecutive_429 = 0
+                self._wait_timeout = WAIT_TIMEOUT_INITIAL
+        else:
+            LOG.warning("Rate limit (429) — waiting %ds (consecutive=%d).", wait_s, n)
+            time.sleep(wait_s)
+
     # ------------------------------------------------------------------
     # Tournament management
     # ------------------------------------------------------------------
@@ -214,22 +265,25 @@ class Matchmaker:
         return False
 
     def _remember_tournament(self, tid: str) -> None:
-        self._registered_tournaments[tid] = time.time() + TOURNAMENT_TTL_SECONDS
+        with self._state_lock:
+            self._registered_tournaments[tid] = time.time() + TOURNAMENT_TTL_SECONDS
 
     def _already_knows_tournament(self, tid: str) -> bool:
-        expires = self._registered_tournaments.get(tid)
-        if expires is None:
-            return False
-        if expires < time.time():
-            self._registered_tournaments.pop(tid, None)
-            return False
-        return True
+        with self._state_lock:
+            expires = self._registered_tournaments.get(tid)
+            if expires is None:
+                return False
+            if expires < time.time():
+                self._registered_tournaments.pop(tid, None)
+                return False
+            return True
 
     def _prune_tournaments(self) -> None:
         now = time.time()
-        stale = [tid for tid, exp in self._registered_tournaments.items() if exp < now]
-        for tid in stale:
-            self._registered_tournaments.pop(tid, None)
+        with self._state_lock:
+            stale = [tid for tid, exp in self._registered_tournaments.items() if exp < now]
+            for tid in stale:
+                self._registered_tournaments.pop(tid, None)
         if stale:
             LOG.debug("Pruned %d expired tournament entries.", len(stale))
 
@@ -343,13 +397,19 @@ class Matchmaker:
 
         # Throttle the *scan* to a sensible interval; the join is
         # additionally throttled below.
+        with self._state_lock:
+            last_scan = self._last_tournament_scan
         now = time.time()
-        if now - self._last_tournament_scan < settings.matchmaking.tournament_scan_interval:
+        if now - last_scan < settings.matchmaking.tournament_scan_interval:
             return
-        self._last_tournament_scan = now
+        with self._state_lock:
+            self._last_tournament_scan = now
+
         self._prune_tournaments()
 
-        if now - self._last_tournament_join < settings.matchmaking.tournament_cooldown:
+        with self._state_lock:
+            last_join = self._last_tournament_join
+        if now - last_join < settings.matchmaking.tournament_cooldown:
             return
 
         teams = list(settings.teams.get("allowed_teams") or ["lichess-bots"])
@@ -370,8 +430,8 @@ class Matchmaker:
                 if sid and not self._already_knows_tournament(sid) and self._tournament_is_acceptable(s):
                     candidates.append(("swiss", sid, s))
         except RuntimeError:
-            # 429: skip this cycle, retry sooner next time.
-            self._last_tournament_scan = now - settings.matchmaking.tournament_scan_interval / 2
+            # 429 from the fetchers — bump counter, back off.
+            self._bump_429()
             return
 
         if not candidates:
@@ -392,18 +452,21 @@ class Matchmaker:
                 elif kind == "swiss":
                     joined = self._join_swiss(tid)
             except RuntimeError:
-                self._last_tournament_scan = now - settings.matchmaking.tournament_scan_interval / 2
+                self._bump_429()
                 return
 
             if joined:
                 self._remember_tournament(tid)
-                self._last_tournament_join = time.time()
+                with self._state_lock:
+                    self._last_tournament_join = time.time()
+                # Successful API call → clear 429 debt.
+                self._reset_429_counter()
                 LOG.info("🏆 Tournament joined (%s): %s — %s",
                          kind, data.get("fullName") or data.get("name"), tid)
                 return  # one tournament per scan is plenty
 
     # ------------------------------------------------------------------
-    # Challenge acceptance policy
+    # Challenge acceptance policy (incoming challenges)
     # ------------------------------------------------------------------
     def is_challenge_acceptable(self, challenge: Dict[str, Any]) -> Tuple[bool, str]:
         if self._is_in_tournament_game():
@@ -461,7 +524,7 @@ class Matchmaker:
     def _pick_tier(self) -> Tuple[int, int]:
         if self._rating_tracker.in_protection():
             LOG.info("🛡️ Protection: pinning to Mid tier (%d games left).",
-                     self._rating_tracker._protection_games)
+                     self._rating_tracker.protection_games_left())
             return settings.matchmaking.tier_mid
 
         t = settings.matchmaking.tier_thresholds
@@ -476,21 +539,26 @@ class Matchmaker:
 
     def _refresh_bot_pool(self) -> None:
         now = time.time()
-        if self._bot_pool and (now - self._last_pool_update) < settings.matchmaking.pool_refresh_seconds:
-            return
+        with self._opponent_lock:
+            if self._bot_pool and (now - self._last_pool_update) < settings.matchmaking.pool_refresh_seconds:
+                return
         try:
             stream = self._client.bots.get_online_bots()
             online = list(itertools.islice(stream, 200))
-            self._bot_pool = [
+            new_pool = [
                 b.get("id")
                 for b in online
                 if b.get("id")
                 and b.get("id").lower() != (self._my_id or "").lower()
                 and b.get("id", "").lower() not in settings.matchmaking.permanent_blacklist
             ]
-            random.shuffle(self._bot_pool)
-            self._last_pool_update = now
-            LOG.info("Bot pool refreshed: %d bots online.", len(self._bot_pool))
+            random.shuffle(new_pool)
+            with self._opponent_lock:
+                self._bot_pool = new_pool
+                self._last_pool_update = now
+            LOG.info("Bot pool refreshed: %d bots online.", len(new_pool))
+            # Successful API call → clear 429 debt.
+            self._reset_429_counter()
         except Exception as exc:  # noqa: BLE001
             if "429" in str(exc):
                 raise
@@ -539,8 +607,14 @@ class Matchmaker:
             ][:50]
 
         if not candidates:
+            with self._opponent_lock:
+                pool_size = len(self._bot_pool)
+                bl_count = sum(1 for v in self._blacklist.values() if v > now)
+            LOG.info("Matchmaker: no target (tier=%s, pool=%d, blacklist=%d)",
+                     tier_name, pool_size, bl_count)
             return None, 0, 0, 0, False, tier_name
 
+        # Bulk user lookup.
         try:
             r = requests.post(
                 "https://lichess.org/api/users",
@@ -552,6 +626,7 @@ class Matchmaker:
                 raise RuntimeError("HTTP 429")
             if r.status_code == 200:
                 users_data = r.json() or []
+                self._reset_429_counter()  # success
                 random.shuffle(users_data)
                 for user in users_data:
                     bot_id = user.get("id")
@@ -598,11 +673,13 @@ class Matchmaker:
             LOG.info("Matchmaker disabled via config.")
             return
 
-        LOG.info("🚀 Matchmaker v12 active — distribution Low %s | Mid %s | High %s | Elite %s",
-                 f"{int(settings.matchmaking.tier_thresholds['LOW']*100)}%",
-                 f"{int((settings.matchmaking.tier_thresholds['MID']-settings.matchmaking.tier_thresholds['LOW'])*100)}%",
-                 f"{int((settings.matchmaking.tier_thresholds['HIGH']-settings.matchmaking.tier_thresholds['MID'])*100)}%",
-                 f"{int((1-settings.matchmaking.tier_thresholds['HIGH'])*100)}%")
+        LOG.info(
+            "🚀 Matchmaker v12 active — distribution Low %s | Mid %s | High %s | Elite %s",
+            f"{int(settings.matchmaking.tier_thresholds['LOW']*100)}%",
+            f"{int((settings.matchmaking.tier_thresholds['MID']-settings.matchmaking.tier_thresholds['LOW'])*100)}%",
+            f"{int((settings.matchmaking.tier_thresholds['HIGH']-settings.matchmaking.tier_thresholds['MID'])*100)}%",
+            f"{int((1-settings.matchmaking.tier_thresholds['HIGH'])*100)}%",
+        )
         LOG.info("   Max per opponent: %d", settings.matchmaking.max_games_per_opponent)
 
         while True:
@@ -627,9 +704,7 @@ class Matchmaker:
                         self._find_suitable_target()
                 except RuntimeError as exc:
                     if "429" in str(exc):
-                        LOG.warning("Rate limit (429), waiting %ds.", self._wait_timeout)
-                        time.sleep(self._wait_timeout)
-                        self._wait_timeout = min(self._wait_timeout * 2, 900)
+                        self._bump_429()
                         continue
                     raise
 
@@ -644,13 +719,17 @@ class Matchmaker:
 
                 with self._opponent_lock:
                     played = self._opponent_tracker.get(target.lower(), 0)
-                LOG.info("[%s] → %s (%d) | %s | %s | %s | game %d/%d",
-                         tier_name, target, rating, rated_str, tc_label, variant,
-                         played, settings.matchmaking.max_games_per_opponent)
-
-                self._blacklist[target.lower()] = datetime.now() + timedelta(
-                    minutes=settings.matchmaking.blacklist_minutes
+                LOG.info(
+                    "[%s] → %s (%d) | %s | %s | %s | game %d/%d",
+                    tier_name, target, rating, rated_str, tc_label, variant,
+                    played, settings.matchmaking.max_games_per_opponent,
                 )
+
+                # Blacklist BEFORE the call so we don't re-target if it succeeds.
+                with self._opponent_lock:
+                    self._blacklist[target.lower()] = datetime.now() + timedelta(
+                        minutes=settings.matchmaking.blacklist_minutes
+                    )
                 try:
                     self._client.challenges.create(
                         username=target,
@@ -659,35 +738,39 @@ class Matchmaker:
                         clock_limit=limit_sn,
                         clock_increment=inc_sn,
                     )
-                    self._wait_timeout = 120
+                    # Successful API call → clear 429 debt.
+                    self._reset_429_counter()
                 except Exception as exc:  # noqa: BLE001
                     if "429" in str(exc):
                         raise
                     LOG.warning("Challenge creation failed: %s", exc)
-                    self._blacklist[target.lower()] = datetime.now() + timedelta(
-                        minutes=settings.matchmaking.failed_challenge_blacklist_minutes
-                    )
+                    # Replace the long blacklist with a short failure one.
+                    with self._opponent_lock:
+                        self._blacklist[target.lower()] = datetime.now() + timedelta(
+                            minutes=settings.matchmaking.failed_challenge_blacklist_minutes
+                        )
 
                 time.sleep(settings.matchmaking.safety_lock_time)
 
+            except RuntimeError as exc:
+                # 429 raised from challenge.create()
+                if "429" in str(exc):
+                    self._bump_429()
+                else:
+                    LOG.warning("Matchmaker RuntimeError: %s", exc)
+                    time.sleep(30)
             except Exception as exc:  # noqa: BLE001
                 err = str(exc)
                 if "429" in err:
-                    LOG.warning("Rate limit (429), waiting %ds.", self._wait_timeout)
-                    time.sleep(self._wait_timeout)
-                    self._wait_timeout = min(self._wait_timeout * 2, 900)
+                    self._bump_429()
                 else:
                     LOG.warning("Matchmaker error: %s", err)
                     time.sleep(30)
 
     def _cleanup_history(self) -> None:
-        # Forget blacklisted opponents after the period; opponent_tracker
-        # is reset every opponent_history_seconds to keep memory bounded.
         cutoff = datetime.now()
-        self._blacklist = {
-            k: v for k, v in self._blacklist.items() if v > cutoff
-        }
         with self._opponent_lock:
+            self._blacklist = {k: v for k, v in self._blacklist.items() if v > cutoff}
             old_count = len(self._opponent_tracker)
             self._opponent_tracker.clear()
         LOG.debug("Cleanup: %d opponent records cleared.", old_count)

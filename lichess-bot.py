@@ -16,9 +16,11 @@ Compared to v11, this rewrite:
 * Adds a ``--self-test`` flag that exercises config + chat plumbing
   without actually connecting to Lichess, so a fork author can verify
   their setup in 5 seconds.
-
-The file is intentionally self-contained: dropping it on a fresh
-machine with ``config.yml`` and the compiled engine is enough to run.
+* Properly routes incoming challenges through the matchmaker's
+  ``is_challenge_acceptable`` (the v12.0.0 release forgot this and
+  accepted anything that fit the time/parallel constraints).
+* Reports every finished game back to the matchmaker so the rating
+  tracker, opponent tracker and protection mode actually work.
 """
 
 from __future__ import annotations
@@ -41,7 +43,6 @@ import chess.polyglot
 import requests
 import yaml
 
-import oxydan_chat
 from config import settings
 from oxydan_chat import ChatSender
 from oxydan_learn import learn
@@ -454,6 +455,7 @@ def _handle_game(
     my_id: str,
     active: ActiveGames,
     chat: ChatSender,
+    mm: Optional[Any] = None,
 ) -> None:
     try:
         stream = client.bots.stream_game_state(game_id)
@@ -468,7 +470,6 @@ def _handle_game(
         game_mode = "blitz"
         rated = False
         opp_id = ""
-        rated_check = True  # always allow unless explicitly disabled
 
         def _send(category: str, room: str = "player") -> None:
             if not settings.oxydan_chat.enabled:
@@ -515,14 +516,8 @@ def _handle_game(
                 game_start_time = time.time()
                 losing_msg_sent = False
 
-                # Greeting — but only after the game is actually started
-                # to avoid Lichess rejecting the message in 'created' state.
-                if settings.oxydan_chat.enabled and (not rated or settings.oxydan_chat.chat_in_rated):
-                    # Defer the greeting to the first gameState update —
-                    # that event is guaranteed to come after gameFull and
-                    # is when Lichess officially opens chat.
-                    pass
-
+                # Greeting is deferred to the first gameState event to
+                # make sure Lichess has officially opened the chat.
                 curr_state = state.get("state", {}) or {}
 
             elif state["type"] == "gameState":
@@ -533,9 +528,8 @@ def _handle_game(
             if board is None:
                 continue
 
-            # Greeting on first gameState (game has officially started)
+            # Greeting on first gameState (game has officially started).
             if not game_started:
-                # Re-check the game has actually started (state.status == "started")
                 if (curr_state.get("status") in ("started", "resign", "mate", "draw",
                                                  "outoftime", "stalemate", "aborted")
                         or curr_state.get("moves")):
@@ -585,12 +579,19 @@ def _handle_game(
                     time.sleep(1)
                     _send("human_postgame")
 
-                # Record into Oxydan Learn.
-                if result in ("win", "loss", "draw") and len(board.move_stack) > 0:
+                # Oxydan Learn: book weighting for next time.
+                if result in ("win", "loss", "draw") and board.move_stack:
                     try:
                         learn.record_result(board, result)
                     except Exception as exc:  # noqa: BLE001
                         LOG.debug("oxydan_learn.record_result failed: %s", exc)
+
+                # Matchmaker: rating tracker + opponent tracker.
+                if mm and status != "aborted":
+                    try:
+                        mm.record_game_result(result, game_mode, opponent_id=opp_id)
+                    except Exception as exc:  # noqa: BLE001
+                        LOG.warning("mm.record_game_result failed: %s", exc)
 
                 LOG.info(
                     "🏁 Game %s finished: %s (mode=%s, opp=%s, rated=%s)",
@@ -732,7 +733,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     active = ActiveGames()
     RuntimeWatchdog(start_time, active).start()
 
-    # Matchmaking thread (only if enabled)
+    # Matchmaker thread (optional). mm is initialised to None so the
+    # `if mm:` checks below never raise NameError if construction fails.
+    mm: Optional[Any] = None
     try:
         from matchmaking import Matchmaker  # local import to avoid cycles
     except Exception as exc:  # noqa: BLE001
@@ -752,9 +755,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             threading.Thread(target=mm.start, daemon=True, name="matchmaker").start()
         except Exception as exc:  # noqa: BLE001
             LOG.error("Matchmaker failed to start: %s", exc)
+            mm = None
 
-    LOG.info("🔥 Oxydan 12 ready. ID: %s | Chat: %s",
-             my_id, "ON" if settings.oxydan_chat.enabled else "OFF")
+    LOG.info("🔥 Oxydan 12 ready. ID: %s | Chat: %s | Matchmaker: %s",
+             my_id,
+             "ON" if settings.oxydan_chat.enabled else "OFF",
+             "ON" if mm else "OFF")
 
     while True:
         try:
@@ -777,39 +783,54 @@ def main(argv: Optional[List[str]] = None) -> int:
                         + settings.runtime.min_game_seconds_remaining
                     )
 
+                    # Delegate the policy decision to the matchmaker.
+                    accept, reason = True, "policy-default"
+                    if mm is not None:
+                        try:
+                            accept, reason = mm.is_challenge_acceptable(ch)
+                        except Exception as exc:  # noqa: BLE001
+                            LOG.warning("mm.is_challenge_acceptable failed for %s: %s",
+                                        ch_id, exc)
+                            accept, reason = True, "matchmaker-error"
+
                     can_accept = (
                         is_time_safe
                         and time_limit <= settings.runtime.max_game_time_limit
                         and active.count() < settings.runtime.max_parallel_games
+                        and accept
                     )
 
                     if not can_accept:
-                        reason = "later"
                         if not is_time_safe:
                             detail = (f"runtime window too tight "
                                       f"({int(time_remaining)}s < {int(estimated_game_duration)}s)")
                         elif time_limit > settings.runtime.max_game_time_limit:
                             detail = f"game too long ({time_limit}s)"
-                        else:
+                        elif active.count() >= settings.runtime.max_parallel_games:
                             detail = "parallel game cap reached"
+                        elif not accept:
+                            detail = reason or "policy"
+                        else:
+                            detail = "unknown"
                         try:
-                            client.challenges.decline(ch_id, reason=reason)
-                        except Exception:  # noqa: BLE001
-                            pass
-                        LOG.info("❌ Declined %s: %s", ch_id, detail)
+                            client.challenges.decline(ch_id, reason="later")
+                            LOG.info("❌ Declined %s: %s (reason: %s)",
+                                     ch_id, detail, reason)
+                        except Exception as exc:  # noqa: BLE001
+                            LOG.warning("Decline failed for %s: %s", ch_id, exc)
                         continue
 
                     if not active.try_reserve_slot():
                         try:
                             client.challenges.decline(ch_id, reason="later")
-                        except Exception:  # noqa: BLE001
-                            pass
+                        except Exception as exc:  # noqa: BLE001
+                            LOG.warning("Decline (no-slot) failed for %s: %s", ch_id, exc)
                         continue
 
                     try:
                         client.challenges.accept(ch_id)
-                        LOG.info("✅ Accepted %s (est %ds, %.0fs left)",
-                                 ch_id, int(estimated_game_duration), time_remaining)
+                        LOG.info("✅ Accepted %s (est %ds, %.0fs left, reason: %s)",
+                                 ch_id, int(estimated_game_duration), time_remaining, reason)
                     except Exception as exc:  # noqa: BLE001
                         active.release_reservation()
                         LOG.warning("Accept failed for %s: %s", ch_id, exc)
@@ -820,7 +841,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     if active.add(game_id):
                         threading.Thread(
                             target=_handle_game,
-                            args=(client, game_id, bot, my_id, active, chat),
+                            args=(client, game_id, bot, my_id, active, chat, mm),
                             daemon=True,
                             name=f"game-{game_id[:6]}",
                         ).start()

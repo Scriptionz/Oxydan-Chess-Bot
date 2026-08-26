@@ -45,7 +45,7 @@ class Settings:
     threads_per_engine: int = 2
     hash_mb: int = 256
     max_concurrent_games: int = 2
-    polyglot_book_path: Optional[str] = "books/oxydan_learn.bin"
+    polyglot_book_path: Optional[str] = "books/Cerebellum3Merge.bin"
     tablebase_enabled: bool = True
     tablebase_timeout_sec: float = 0.75
     request_timeout_sec: float = 15.0

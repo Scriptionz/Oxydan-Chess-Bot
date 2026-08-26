@@ -1,804 +1,910 @@
-"""Oxydan 12 — Lichess bot main loop.
-
-Compared to v11, this rewrite:
-
-* Loads everything from :mod:`config` (no more hard-coded SETTINGS dict
-  duplicated across files).
-* Uses :mod:`oxydan_chat` for branded chat. The previous version had
-  two ``except TypeError: pass`` branches that silently dropped every
-  chat message — that is fixed here and every send is logged.
-* Tracks openings with :mod:`oxydan_learn` for optional win/loss-aware
-  book selection.
-* Implements master-level time allocation: a panic mode for <2s, a
-  transition band, a fast opening budget, and a complexity bonus past
-  move 30.
-* Stays faithful to the Lichess Bot API surface (``client.bots.*``).
-* Adds a ``--self-test`` flag that exercises config + chat plumbing
-  without actually connecting to Lichess, so a fork author can verify
-  their setup in 5 seconds.
-* Properly routes incoming challenges through the matchmaker's
-  ``is_challenge_acceptable`` (the v12.0.0 release forgot this and
-  accepted anything that fit the time/parallel constraints).
-* Reports every finished game back to the matchmaker so the rating
-  tracker, opponent tracker and protection mode actually work.
-"""
-
-from __future__ import annotations
-
 import argparse
+import dataclasses
+import json
 import logging
-import os
-import queue
-import random
+import signal
 import sys
 import threading
 import time
-from datetime import timedelta
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Dict, Optional, Set
 
-import berserk
 import chess
 import chess.engine
 import chess.polyglot
 import requests
-import yaml
-
-from config import settings
-from oxydan_chat import ChatSender
-from oxydan_learn import learn
-
-LOG = logging.getLogger("oxydan")
 
 
 # ---------------------------------------------------------------------------
-# Logging
+# Logging & Configuration
 # ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(threadName)s: %(message)s",
+)
+logger = logging.getLogger("Oxydan12")
 
-def _setup_logging() -> None:
-    # Make stdout/stderr UTF-8 so emoji in log lines don't crash on
-    # Windows consoles that default to cp1254.
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:  # noqa: BLE001
-            pass
 
-    level = os.environ.get("OXYDAN_LOG_LEVEL", "INFO").upper()
-    logging.basicConfig(
-        level=getattr(logging, level, logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-        stream=sys.stdout,
-        force=True,
+@dataclasses.dataclass
+class TimeManagerConfig:
+    opening_time_fraction: float = 0.04
+    midgame_time_fraction: float = 0.06
+    endgame_time_fraction: float = 0.05
+    panic_threshold_sec: float = 2.0
+    panic_move_time: float = 0.15
+    network_safety_sec: float = 0.25
+    minimum_engine_time: float = 0.05
+
+
+@dataclasses.dataclass
+class Settings:
+    # Prefer an environment variable in production:
+    #   LICHESS_TOKEN=your_token
+    token: str = "YOUR_LICHESS_API_TOKEN"
+    lichess_base_url: str = "https://lichess.org"
+    engine_path: str = "stockfish"
+    threads_per_engine: int = 2
+    hash_mb: int = 256
+    max_concurrent_games: int = 2
+    polyglot_book_path: Optional[str] = "books/oxydan_learn.bin"
+    tablebase_enabled: bool = True
+    tablebase_timeout_sec: float = 0.75
+    request_timeout_sec: float = 15.0
+    time_config: TimeManagerConfig = dataclasses.field(
+        default_factory=TimeManagerConfig
     )
-    # berserk has a chatty default logger; tone it down unless asked.
-    if os.environ.get("OXYDAN_VERBOSE_BERSERK") != "1":
-        logging.getLogger("berserk").setLevel(logging.WARNING)
+
+
+class Config:
+    settings = Settings()
 
 
 # ---------------------------------------------------------------------------
-# Game mode classification
+# Thread-safe game tracking
 # ---------------------------------------------------------------------------
-
-def _get_game_mode(time_control: Any) -> str:
-    if not isinstance(time_control, dict):
-        return "blitz"
-    limit = time_control.get("limit", 300)
-    if limit < 180:
-        return "bullet"
-    if limit < 480:
-        return "blitz"
-    if limit < 1500:
-        return "rapid"
-    return "classical"
-
-
-# ---------------------------------------------------------------------------
-# Active-game bookkeeping
-# ---------------------------------------------------------------------------
-
 class ActiveGames:
-    """Thread-safe wrapper around the set of in-flight game ids."""
+    """Tracks active games and pending challenge reservations."""
 
-    def __init__(self) -> None:
-        self._ids: Set[str] = set()
-        self._pending = 0
-        self._lock = threading.Lock()
+    def __init__(self, max_games: int, reservation_ttl: float = 30.0):
+        self.max_games = max_games
+        self.reservation_ttl = reservation_ttl
+        self.lock = threading.Lock()
+        self._active_game_ids: Set[str] = set()
+        self._pending_reservations: Dict[str, float] = {}
 
-    def count(self, include_pending: bool = True) -> int:
-        with self._lock:
-            return len(self._ids) + (self._pending if include_pending else 0)
+    def _cleanup_stale_reservations(self) -> None:
+        now = time.time()
+        expired = [
+            cid
+            for cid, ts in self._pending_reservations.items()
+            if now - ts > self.reservation_ttl
+        ]
+        for cid in expired:
+            logger.warning(
+                "Pending reservation for challenge %s timed out. Cleaning up.",
+                cid,
+            )
+            del self._pending_reservations[cid]
 
-    def try_reserve_slot(self) -> bool:
-        with self._lock:
-            if self.count() >= settings.runtime.max_parallel_games:
-                return False
-            self._pending += 1
-            return True
+    def can_accept_challenge(self) -> bool:
+        with self.lock:
+            self._cleanup_stale_reservations()
+            return (
+                len(self._active_game_ids) + len(self._pending_reservations)
+                < self.max_games
+            )
 
-    def release_reservation(self) -> None:
-        with self._lock:
-            if self._pending > 0:
-                self._pending -= 1
+    def reserve_slot(self, challenge_id: str) -> bool:
+        with self.lock:
+            self._cleanup_stale_reservations()
+            if challenge_id in self._pending_reservations:
+                return True
 
-    def add(self, game_id: str) -> bool:
-        with self._lock:
-            if game_id in self._ids:
-                return False
-            if len(self._ids) >= settings.runtime.max_parallel_games:
-                return False
-            self._ids.add(game_id)
-            return True
+            used = len(self._active_game_ids) + len(self._pending_reservations)
+            if used < self.max_games:
+                self._pending_reservations[challenge_id] = time.time()
+                return True
+            return False
 
-    def discard(self, game_id: str) -> None:
-        with self._lock:
-            self._ids.discard(game_id)
+    def release_reservation(self, challenge_id: str) -> None:
+        with self.lock:
+            self._pending_reservations.pop(challenge_id, None)
 
+    def confirm_game_start(
+        self, game_id: str, challenge_id: Optional[str] = None
+    ) -> None:
+        with self.lock:
+            if challenge_id:
+                self._pending_reservations.pop(challenge_id, None)
+            elif self._pending_reservations:
+                # Lichess gameStart does not reliably carry the originating
+                # challenge id, so consume the oldest accepted reservation.
+                oldest = min(
+                    self._pending_reservations,
+                    key=self._pending_reservations.get,
+                )
+                del self._pending_reservations[oldest]
 
-# ---------------------------------------------------------------------------
-# Runtime watchdog
-# ---------------------------------------------------------------------------
+            self._active_game_ids.add(game_id)
+            logger.info(
+                "Game %s started. Active slots: %d/%d",
+                game_id,
+                len(self._active_game_ids),
+                self.max_games,
+            )
 
-class RuntimeWatchdog(threading.Thread):
-    """Shuts the bot down after ``max_total_runtime_seconds`` if configured."""
-
-    def __init__(self, start_time: float, active: ActiveGames) -> None:
-        super().__init__(daemon=True, name="oxydan-watchdog")
-        self._start = start_time
-        self._active = active
-
-    def run(self) -> None:
-        max_runtime = getattr(settings.runtime, "max_total_runtime_seconds", 0)
-        if max_runtime <= 0:
-            return
-
-        while True:
-            time.sleep(30)
-            elapsed = time.time() - self._start
-            if elapsed <= max_runtime:
-                continue
-            if self._active.count(include_pending=False) == 0:
-                LOG.info("⏰ Watchdog: runtime cap reached, exiting cleanly.")
-                os._exit(0)
-            LOG.info(
-                "⏰ Watchdog: runtime cap reached, %d game(s) still running — waiting.",
-                self._active.count(include_pending=False),
+    def game_finished(self, game_id: str) -> None:
+        with self.lock:
+            self._active_game_ids.discard(game_id)
+            logger.info(
+                "Game %s finished. Active slots: %d/%d",
+                game_id,
+                len(self._active_game_ids),
+                self.max_games,
             )
 
 
 # ---------------------------------------------------------------------------
-# Engine wrapper — OxydanV12
+# Stockfish engine management
 # ---------------------------------------------------------------------------
+class EnginePool:
+    """
+    Simple process pool.
 
-class OxydanV12:
-    """Owns the engine pool and the time-management policy."""
+    One Stockfish process is created per configured slot, so simultaneous games
+    do not serialize behind a single global engine lock.
+    """
 
-    def __init__(self, exe_path: str, uci_options: Optional[Dict[str, Any]] = None) -> None:
-        self.exe_path = exe_path
-        self.book_path = settings.book_path
-        self.engine_pool: "queue.Queue[chess.engine.SimpleEngine]" = queue.Queue()
+    def __init__(self, path: str, threads: int, hash_mb: int, pool_size: int):
+        self.path = path
+        self.threads = threads
+        self.hash_mb = hash_mb
+        self.pool_size = max(1, pool_size)
+        self.lock = threading.Lock()
+        self._engines: list[chess.engine.SimpleEngine] = []
+        self._available: list[chess.engine.SimpleEngine] = []
+        self._condition = threading.Condition(self.lock)
 
-        pool_size = settings.runtime.max_parallel_games + 1
-        overhead = (uci_options or {}).get("MoveOverhead") or \
-                   (uci_options or {}).get("Move Overhead") or 100
+    def start(self) -> None:
+        with self.lock:
+            if self._engines:
+                return
 
-        try:
-            for _ in range(pool_size):
-                eng = chess.engine.SimpleEngine.popen_uci(self.exe_path, timeout=30)
-                self._configure(eng, uci_options or {}, overhead)
-                self.engine_pool.put(eng)
-            LOG.info("🚀 %d engine process(es) ready (MoveOverhead=%s ms).", pool_size, overhead)
-        except Exception as exc:  # noqa: BLE001
-            LOG.critical("Engine pool failed to start: %s", exc)
-            sys.exit(1)
+            logger.info("Initializing %d Stockfish engine(s) from: %s",
+                        self.pool_size, self.path)
 
-    @staticmethod
-    def _configure(eng: chess.engine.SimpleEngine, options: Dict[str, Any], overhead: int) -> None:
-        for key in ("Move Overhead", "MoveOverhead"):
             try:
-                eng.configure({key: overhead})
-                break
-            except Exception:  # noqa: BLE001
-                continue
-        for opt, val in options.items():
-            if opt in ("MoveOverhead", "Move Overhead"):
-                continue
-            try:
-                eng.configure({opt: val})
-            except Exception:  # noqa: BLE001
-                LOG.debug("Engine ignored option %r=%r", opt, val)
-
-    @staticmethod
-    def _to_seconds(value: Any) -> float:
-        if value is None:
-            return 0.0
-        if isinstance(value, timedelta):
-            return max(0.0, value.total_seconds())
-        try:
-            return max(0.0, float(value) / 1000.0)
-        except (TypeError, ValueError):
-            return 0.0
-
-    def get_score(self, board: chess.Board) -> Optional[int]:
-        engine: Optional[chess.engine.SimpleEngine] = None
-        try:
-            engine = self.engine_pool.get(timeout=5)
-            info = engine.analyse(board, chess.engine.Limit(depth=6, time=0.05))
-            score = info.get("score")
-            if score is not None:
-                return score.white().score(mate_score=10000)
-        except Exception as exc:  # noqa: BLE001
-            LOG.debug("get_score failed: %s", exc)
-        finally:
-            if engine is not None:
-                self.engine_pool.put(engine)
-        return None
-
-    def fallback_move(self, board: chess.Board) -> Optional[chess.Move]:
-        legal = list(board.legal_moves)
-        if not legal:
-            return None
-        values = {
-            chess.PAWN: 100, chess.KNIGHT: 320, chess.BISHOP: 330,
-            chess.ROOK: 500, chess.QUEEN: 900, chess.KING: 0,
-        }
-        best, best_score = legal[0], -10**9
-        for mv in legal:
-            score = 0
-            captured = board.piece_at(mv.to_square)
-            mover = board.piece_at(mv.from_square)
-            if captured:
-                score += 10 * values.get(captured.piece_type, 0)
-            if mover:
-                score -= values.get(mover.piece_type, 0)
-            if mv.promotion:
-                score += values.get(mv.promotion, 0)
-            if board.gives_check(mv):
-                score += 80
-            board.push(mv)
-            if board.is_checkmate():
-                score += 100_000
-            if board.is_repetition(2):
-                score -= 50
-            board.pop()
-            if score > best_score:
-                best, best_score = mv, score
-        return best
-
-    def _allocate_time(
-        self,
-        board: chess.Board,
-        wtime: Any, btime: Any, winc: Any, binc: Any,
-    ) -> Tuple[float, float, float, float]:
-        tm = settings.time_management
-        buffer = tm.latency_buffer_ms / 1000.0
-
-        if board.turn == chess.WHITE:
-            my_raw, op_raw = wtime, btime
-            my_inc_raw, op_inc_raw = winc, binc
-        else:
-            my_raw, op_raw = btime, wtime
-            my_inc_raw, op_inc_raw = binc, winc
-
-        my_s = max(0.005, self._to_seconds(my_raw) - buffer)
-        op_s = max(0.005, self._to_seconds(op_raw) - buffer)
-        my_inc = self._to_seconds(my_inc_raw)
-        op_inc = self._to_seconds(op_inc_raw)
-
-        if my_s < tm.panic_threshold_s:
-            return max(0.010, my_s * 0.10), op_s, 0.0, op_inc
-
-        if my_s < tm.transition_threshold_s:
-            my_send = my_s * 0.8
-            return my_send, op_s, my_inc, op_inc
-
-        ply = len(board.move_stack)
-        if ply < tm.opening_move_count:
-            my_send = my_s * tm.opening_time_fraction
-            return my_send, op_s, my_inc, op_inc
-
-        if ply > tm.complexity_moves_threshold:
-            extra = my_s * tm.complexity_extra_fraction
-            my_send = min(my_s, my_s * 0.7 + extra)
-            return my_send, op_s, my_inc, op_inc
-
-        return my_s, op_s, my_inc, op_inc
+                for _ in range(self.pool_size):
+                    engine = chess.engine.SimpleEngine.popen_uci(self.path)
+                    engine.configure(
+                        {
+                            "Threads": self.threads,
+                            "Hash": self.hash_mb,
+                        }
+                    )
+                    self._engines.append(engine)
+                    self._available.append(engine)
+            except Exception:
+                for engine in self._engines:
+                    try:
+                        engine.quit()
+                    except Exception:
+                        pass
+                self._engines.clear()
+                self._available.clear()
+                raise
 
     def get_best_move(
-        self,
-        board: chess.Board,
-        wtime: Any, btime: Any, winc: Any, binc: Any,
-    ) -> Optional[chess.Move]:
-        move = self._try_opening_book(board)
-        if move is not None:
-            return move
-        move = self._try_online_tablebase(board, wtime, btime, winc, binc)
-        if move is not None:
-            return move
-        move = self._try_engine(board, wtime, btime, winc, binc)
-        if move is not None:
-            return move
-        LOG.warning("Engine failed, falling back to heuristic.")
-        return self.fallback_move(board)
+        self, board: chess.Board, time_limit: float
+    ) -> chess.Move:
+        with self._condition:
+            while not self._available:
+                self._condition.wait()
+            engine = self._available.pop()
 
-    def _try_opening_book(self, board: chess.Board) -> Optional[chess.Move]:
-        if board.chess960 or not os.path.exists(self.book_path):
-            return None
         try:
-            with chess.polyglot.open_reader(self.book_path) as reader:
-                entries = list(reader.find_all(board))
-            if not entries:
-                return None
+            limit = chess.engine.Limit(
+                time=max(0.05, float(time_limit))
+            )
+            result = engine.play(board, limit)
+            if result.move is None:
+                raise RuntimeError("Stockfish returned no move.")
+            return result.move
+        finally:
+            with self._condition:
+                self._available.append(engine)
+                self._condition.notify()
 
-            ranked = learn.rank_book_moves(board, entries)
-            ranked.sort(key=lambda pair: random.random() / max(pair[1], 0.01))
+    def close(self) -> None:
+        with self.lock:
+            engines = list(self._engines)
+            self._engines.clear()
+            self._available.clear()
 
-            for move, _weight in ranked:
-                if move not in board.legal_moves:
-                    continue
-                board.push(move)
-                key = learn.opening_key(board)
-                board.pop()
-                if not learn.weight_for_key(key) < 0.5:
-                    return move
+        for engine in engines:
+            try:
+                engine.quit()
+            except Exception as exc:
+                logger.error("Error during engine shutdown: %s", exc)
 
-            for entry in entries:
-                if entry.move in board.legal_moves:
-                    return entry.move
-        except Exception as exc:  # noqa: BLE001
-            LOG.warning("📖 Opening book error: %s", exc)
+
+# ---------------------------------------------------------------------------
+# Core evaluator
+# ---------------------------------------------------------------------------
+class OxydanBot:
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        self.session = requests.Session()
+        self.engine_pool = EnginePool(
+            settings.engine_path,
+            settings.threads_per_engine,
+            settings.hash_mb,
+            settings.max_concurrent_games,
+        )
+        self.engine_pool.start()
+        self._book_reader = None
+
+        if settings.polyglot_book_path:
+            try:
+                self._book_reader = chess.polyglot.open_reader(
+                    settings.polyglot_book_path
+                )
+                logger.info("Opening book loaded: %s",
+                            settings.polyglot_book_path)
+            except Exception as exc:
+                logger.warning("Could not load opening book: %s", exc)
+
+    def _allocate_time(
+        self, board: chess.Board, my_time: float, my_inc: float
+    ) -> float:
+        tm = self.settings.time_config
+        safe_time = max(0.0, my_time - tm.network_safety_sec)
+
+        if safe_time <= tm.minimum_engine_time:
+            return tm.minimum_engine_time
+
+        # Absolute panic mode: spend very little but keep a safety margin for
+        # move submission/network overhead.
+        if my_time < tm.panic_threshold_sec:
+            return min(
+                tm.panic_move_time,
+                max(tm.minimum_engine_time, safe_time * 0.35),
+            )
+
+        fullmove = board.fullmove_number
+
+        if fullmove <= 12:
+            allocated = (
+                my_time * tm.opening_time_fraction
+                + my_inc * 0.75
+            )
+        elif fullmove > 30:
+            allocated = (
+                my_time * tm.endgame_time_fraction
+                + my_inc * 0.8
+            )
+        else:
+            allocated = (
+                my_time * tm.midgame_time_fraction
+                + my_inc * 0.8
+            )
+
+        return max(
+            tm.minimum_engine_time,
+            min(allocated, safe_time),
+        )
+
+    def _probe_polyglot(self, board: chess.Board) -> Optional[chess.Move]:
+        if self._book_reader is None:
+            return None
+
+        try:
+            entry = self._book_reader.find(board)
+            if entry:
+                logger.info("Polyglot book hit: %s", entry.move)
+                return entry.move
+        except Exception as exc:
+            logger.debug("Polyglot probe failed: %s", exc)
+
         return None
 
-    def _try_online_tablebase(
-        self, board: chess.Board, wtime: Any, btime: Any, _winc: Any, _binc: Any
+    def _probe_online_tablebase(
+        self, board: chess.Board
     ) -> Optional[chess.Move]:
-        if not settings.tablebase.online_enabled or board.chess960:
+        if not self.settings.tablebase_enabled:
             return None
-        if len(board.piece_map()) > settings.tablebase.max_pieces:
+        if len(board.piece_map()) > 7:
             return None
 
-        my_clock = self._to_seconds(wtime if board.turn == chess.WHITE else btime)
-        if my_clock < max(15.0, settings.tablebase.min_time_for_lookup):
-            return None
         try:
-            r = requests.get(
+            response = self.session.get(
                 "https://tablebase.lichess.ovh/standard",
                 params={"fen": board.fen()},
-                timeout=1.0,
+                timeout=self.settings.tablebase_timeout_sec,
             )
-            if r.status_code == 200:
-                payload = r.json()
-                moves = payload.get("moves") or []
-                if moves:
-                    best = chess.Move.from_uci(moves[0]["uci"])
-                    if best in board.legal_moves:
-                        return best
-        except Exception:  # noqa: BLE001
-            return None
+            response.raise_for_status()
+
+            data = response.json()
+            moves = data.get("moves", [])
+            if not moves:
+                return None
+
+            # Lichess tablebase returns moves sorted by DTZ/winning priority.
+            # Use the first legal move instead of trusting malformed data.
+            for item in moves:
+                uci = item.get("uci")
+                if not uci:
+                    continue
+                move = chess.Move.from_uci(uci)
+                if move in board.legal_moves:
+                    logger.info("Online tablebase hit: %s", uci)
+                    return move
+        except Exception as exc:
+            logger.debug("Tablebase probe failed: %s", exc)
+
         return None
 
-    def _try_engine(
-        self, board: chess.Board, wtime: Any, btime: Any, winc: Any, binc: Any,
-    ) -> Optional[chess.Move]:
-        engine: Optional[chess.engine.SimpleEngine] = None
+    @staticmethod
+    def _fallback_move(board: chess.Board) -> chess.Move:
+        legal_moves = list(board.legal_moves)
+        if not legal_moves:
+            raise RuntimeError("No legal moves available.")
+
+        # Prefer checkmate, then captures, then checks. This is only a
+        # last-resort fallback and deliberately avoids expensive searching.
+        for move in legal_moves:
+            board.push(move)
+            is_mate = board.is_checkmate()
+            board.pop()
+            if is_mate:
+                return move
+
+        captures = [m for m in legal_moves if board.is_capture(m)]
+        if captures:
+            # Prefer captures with the highest captured piece value.
+            values = {
+                chess.PAWN: 100,
+                chess.KNIGHT: 320,
+                chess.BISHOP: 330,
+                chess.ROOK: 500,
+                chess.QUEEN: 900,
+                chess.KING: 20000,
+            }
+            captures.sort(
+                key=lambda m: values.get(
+                    board.piece_at(m.to_square).piece_type
+                    if board.piece_at(m.to_square)
+                    else chess.PAWN,
+                    0,
+                ),
+                reverse=True,
+            )
+            return captures[0]
+
+        for move in legal_moves:
+            if board.gives_check(move):
+                return move
+
+        return legal_moves[0]
+
+    def get_move(
+        self, board: chess.Board, my_time: float, my_inc: float
+    ) -> chess.Move:
+        if board.is_game_over():
+            raise RuntimeError("Cannot select a move: game is over.")
+
+        # Opening book is local and has no network latency.
+        book_move = self._probe_polyglot(board)
+        if book_move and book_move in board.legal_moves:
+            return book_move
+
+        # Never make a network tablebase request when the clock is dangerously
+        # low. This prevents a tablebase timeout from causing a flag.
+        if (
+            self.settings.tablebase_enabled
+            and my_time > self.settings.time_config.panic_threshold_sec
+        ):
+            tb_move = self._probe_online_tablebase(board)
+            if tb_move and tb_move in board.legal_moves:
+                return tb_move
+
+        allocated_time = self._allocate_time(board, my_time, my_inc)
+
         try:
-            engine = self.engine_pool.get(timeout=5)
-
-            my_s, op_s, my_inc, op_inc = self._allocate_time(
-                board, wtime, btime, winc, binc,
+            move = self.engine_pool.get_best_move(
+                board, time_limit=allocated_time
             )
+            if move in board.legal_moves:
+                return move
+            raise RuntimeError(f"Engine returned illegal move: {move}")
+        except Exception as exc:
+            logger.error(
+                "Engine evaluation failed: %s. Using legal fallback.", exc
+            )
+            return self._fallback_move(board)
 
-            if board.turn == chess.WHITE:
-                limit = chess.engine.Limit(
-                    white_clock=my_s, black_clock=op_s,
-                    white_inc=my_inc,  black_inc=op_inc,
-                )
-            else:
-                limit = chess.engine.Limit(
-                    white_clock=op_s, black_clock=my_s,
-                    white_inc=op_inc,  black_inc=my_inc,
-                )
-
-            result = engine.play(board, limit)
-            if result.move and result.move in board.legal_moves:
-                return result.move
-            LOG.warning("Engine returned illegal move %s, ignoring.", result.move)
-        except Exception as exc:  # noqa: BLE001
-            LOG.warning("🚨 Engine error: %s: %s", type(exc).__name__, exc)
-        finally:
-            if engine is not None:
-                self.engine_pool.put(engine)
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Per-game handler
-# ---------------------------------------------------------------------------
-
-def _handle_game(
-    client: berserk.Client,
-    game_id: str,
-    bot: OxydanV12,
-    my_id: str,
-    active: ActiveGames,
-    chat: ChatSender,
-    mm: Optional[Any] = None,
-) -> None:
-    try:
-        stream = client.bots.stream_game_state(game_id)
-
-        board: Optional[chess.Board] = None
-        my_color: Optional[bool] = None
-        last_move_count = 0
-        is_vs_human = False
-        game_started = False
-        game_start_time: Optional[float] = None
-        losing_msg_sent = False
-        game_mode = "blitz"
-        rated = False
-        opp_id = ""
-
-        def _send(category: str, room: str = "player") -> None:
-            if not settings.oxydan_chat.enabled:
-                return
-            if rated and not settings.oxydan_chat.chat_in_rated:
-                return
-            chat.send_pick(game_id, category, room=room)
-
-        for state in stream:
-            if "error" in state:
-                LOG.warning("Stream error for %s: %s", game_id, state["error"])
-                break
-
-            if state.get("type") == "gameFull":
-                white = state.get("white", {}) or {}
-                black = state.get("black", {}) or {}
-                rated = bool(state.get("rated", False))
-                my_color = chess.WHITE if white.get("id") == my_id else chess.BLACK
-                opp = black if my_color == chess.WHITE else white
-                opp_id = (opp.get("id") or "").lower()
-                opp_title = (opp.get("title") or "").upper()
-                is_vs_human = opp_title != "BOT"
-
-                if opp_id in settings.matchmaking.permanent_blacklist:
-                    LOG.info("🚫 Blacklisted opponent %s — resigning.", opp_id)
-                    try:
-                        client.bots.resign_game(game_id)
-                    except Exception as exc:  # noqa: BLE001
-                        LOG.warning("Resign failed: %s", exc)
-                    return
-
-                variant = (state.get("variant") or {}).get("key", "standard")
-                is_960 = variant == "chess960"
-                initial_fen = state.get("initialFen", "startpos")
-                if initial_fen and initial_fen != "startpos":
-                    board = chess.Board(initial_fen, chess960=is_960)
-                else:
-                    board = chess.Board(chess960=is_960)
-
-                clock = state.get("clock", {}) or {}
-                game_mode = "chess960" if is_960 else _get_game_mode(clock)
-
-                last_move_count = 0
-                game_start_time = time.time()
-                losing_msg_sent = False
-                curr_state = state.get("state", {}) or {}
-
-            elif state.get("type") == "gameState":
-                curr_state = state
-            else:
-                continue
-
-            if board is None:
-                continue
-
-            if not game_started:
-                if (curr_state.get("status") in ("started", "resign", "mate", "draw",
-                                                 "outoftime", "stalemate", "aborted")
-                        or curr_state.get("moves")):
-                    game_started = True
-                    if settings.oxydan_chat.enabled and (not rated or settings.oxydan_chat.chat_in_rated):
-                        category = "greeting_human" if is_vs_human else "greeting_bot"
-                        chat.send_pick(game_id, category)
-
-            moves_str = (curr_state.get("moves") or "").strip()
-            moves = moves_str.split() if moves_str else []
-
-            if len(moves) > last_move_count:
-                for m in moves[last_move_count:]:
-                    try:
-                        board.push(board.parse_uci(m))
-                    except Exception as exc:  # noqa: BLE001
-                        LOG.warning("Move parse error %r: %s", m, exc)
-                        break
-                last_move_count = len(board.move_stack)
-
-            if (not game_started
-                    and game_start_time is not None
-                    and (time.time() - game_start_time) > settings.runtime.abort_wait_seconds):
-                try:
-                    client.bots.abort_game(game_id)
-                    LOG.info("⏳ Aborted idle game %s", game_id)
-                except Exception as exc:  # noqa: BLE001
-                    LOG.warning("Abort failed: %s", exc)
-                break
-
-            status = curr_state.get("status")
-            if status in ("mate", "resign", "draw", "outoftime", "aborted", "stalemate"):
-                winner = curr_state.get("winner")
-                my_color_str = "white" if my_color == chess.WHITE else "black"
-                if status in ("draw", "stalemate"):
-                    result, category = "draw", "draw"
-                elif winner:
-                    result = "win" if winner == my_color_str else "loss"
-                    category = result
-                else:
-                    result, category = "draw", "draw"
-
-                _send(category)
-                if is_vs_human:
-                    time.sleep(1)
-                    _send("human_postgame")
-
-                if result in ("win", "loss", "draw") and board.move_stack:
-                    try:
-                        learn.record_result(board, result)
-                    except Exception as exc:  # noqa: BLE001
-                        LOG.debug("oxydan_learn.record_result failed: %s", exc)
-
-                if mm and status != "aborted":
-                    try:
-                        mm.record_game_result(result, game_mode, opponent_id=opp_id)
-                    except Exception as exc:  # noqa: BLE001
-                        LOG.warning("mm.record_game_result failed: %s", exc)
-
-                LOG.info(
-                    "🏁 Game %s finished: %s (mode=%s, opp=%s, rated=%s)",
-                    game_id, result, game_mode, opp_id, rated,
-                )
-                break
-
-            if (settings.oxydan_chat.score_chat_enabled
-                    and is_vs_human
-                    and not losing_msg_sent
-                    and len(board.move_stack) >= 20):
-                try:
-                    score = bot.get_score(board)
-                    if score is not None:
-                        my_score = score if my_color == chess.WHITE else -score
-                        if my_score < settings.oxydan_chat.losing_score_threshold:
-                            _send("losing_realization")
-                            losing_msg_sent = True
-                except Exception as exc:  # noqa: BLE001
-                    LOG.debug("score-chat probe failed: %s", exc)
-
-            if my_color is not None and board.turn == my_color and not board.is_game_over():
-                move = bot.get_best_move(
-                    board,
-                    curr_state.get("wtime"),
-                    curr_state.get("btime"),
-                    curr_state.get("winc"),
-                    curr_state.get("binc"),
-                )
-                if move is not None:
-                    for _ in range(3):
-                        try:
-                            client.bots.make_move(game_id, move.uci())
-                            break
-                        except Exception as exc:  # noqa: BLE001
-                            LOG.debug("make_move retry: %s", exc)
-                            time.sleep(0.05)
-
-    except Exception as exc:  # noqa: BLE001
-        LOG.exception("handle_game crashed for %s: %s", game_id, exc)
-    finally:
-        active.discard(game_id)
-
-
-# ---------------------------------------------------------------------------
-# Self test
-# ---------------------------------------------------------------------------
-
-def _self_test() -> int:
-    """Sanity check: config + chat plumbing without connecting to Lichess."""
-    print("🔧 Oxydan self-test")
-    print(f"   config path     : {settings.config_path}")
-    print(f"   engine binary   : {settings.engine.binary_path}")
-    print(f"   max parallel    : {settings.runtime.max_parallel_games}")
-    print(f"   chat enabled    : {settings.oxydan_chat.enabled}")
-    print(f"   learn enabled   : {settings.oxydan_learn.enabled}")
-    if settings.oxydan_learn.enabled:
-        print(f"   learn summary   : {learn.summary()}")
-
-    if not os.path.exists(settings.engine.binary_path):
-        print(f"❌ Engine binary not found at {settings.engine.binary_path}")
-        return 1
-
-    try:
-        bot = OxydanV12(settings.engine.binary_path,
-                        uci_options=settings.engine.uci_options)
-    except Exception as exc:  # noqa: BLE001
-        print(f"❌ Engine failed to start: {exc}")
-        return 1
-
-    board = chess.Board()
-    try:
-        move = bot.get_best_move(board, 10000, 10000, 1000, 1000)
-    finally:
-        while not bot.engine_pool.empty():
+    def close(self) -> None:
+        if self._book_reader is not None:
             try:
-                eng = bot.engine_pool.get_nowait()
-                eng.quit()
-            except Exception:  # noqa: BLE001
-                break
+                self._book_reader.close()
+            except Exception:
+                pass
+            self._book_reader = None
 
-    if not move or move not in board.legal_moves:
-        print("❌ Engine did not produce a legal move.")
-        return 1
-    print(f"✅ Engine produced {move.uci()}")
-    return 0
+        self.engine_pool.close()
+        self.session.close()
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Lichess API client
 # ---------------------------------------------------------------------------
+class LichessClient:
+    API_PREFIX = "/api"
 
-def _make_client() -> berserk.Client:
-    if not settings.has_token():
-        raise RuntimeError(
-            "No LICHESS_TOKEN. Set the LICHESS_TOKEN environment variable or "
-            "replace the $LICHESS_TOKEN placeholder in config.yml."
-        )
-    return berserk.Client(session=berserk.TokenSession(settings.token))
-
-
-def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(prog="lichess-bot", description="Oxydan 12")
-    parser.add_argument("--self-test", action="store_true",
-                        help="Validate config + engine without connecting to Lichess.")
-    args = parser.parse_args(argv)
-
-    _setup_logging()
-    if args.self_test:
-        return _self_test()
-
-    if not settings.has_token():
-        LOG.error(
-            "No LICHESS_TOKEN found. Set it as an env var or in config.yml, "
-            "or run with --self-test."
-        )
-        return 1
-
-    start_time = time.time()
-    try:
-        client = _make_client()
-        my_id = client.account.get()["id"]
-    except Exception as exc:  # noqa: BLE001
-        LOG.error("Could not connect to Lichess: %s", exc)
-        return 1
-
-    chat = ChatSender(client)
-
-    bot = OxydanV12(
-        settings.engine.binary_path,
-        uci_options=settings.engine.uci_options,
-    )
-
-    active = ActiveGames()
-    RuntimeWatchdog(start_time, active).start()
-
-    mm: Optional[Any] = None
-    try:
-        from matchmaking import Matchmaker
-    except Exception as exc:  # noqa: BLE001
-        LOG.error("matchmaking module failed to import: %s", exc)
-        Matchmaker = None  # type: ignore[assignment]
-
-    if Matchmaker is not None and settings.matchmaking.allow_feed:
-        try:
-            with open(settings.config_path, "r", encoding="utf-8") as fh:
-                raw_config = yaml.safe_load(fh) or {}
-            mm = Matchmaker(
-                client=client,
-                config=raw_config,
-                active_games=active,
-                token=settings.token,
+    def __init__(self, settings: Settings):
+        token = settings.token.strip()
+        if not token or token == "YOUR_LICHESS_API_TOKEN":
+            raise ValueError(
+                "Set Settings.token to a valid Lichess BOT API token."
             )
-            threading.Thread(target=mm.start, daemon=True, name="matchmaker").start()
-        except Exception as exc:  # noqa: BLE001
-            LOG.error("Matchmaker failed to start: %s", exc)
-            mm = None
 
-    LOG.info("🔥 Oxydan 12 ready. ID: %s | Chat: %s | Matchmaker: %s",
-             my_id,
-             "ON" if settings.oxydan_chat.enabled else "OFF",
-             "ON" if mm else "OFF")
+        self.base_url = settings.lichess_base_url.rstrip("/")
+        self.session = requests.Session()
+        self.session.headers.update(
+            {
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/x-ndjson",
+                "User-Agent": "Oxydan12/1.0",
+            }
+        )
+        self.request_timeout = settings.request_timeout_sec
 
-    while True:
+    def _url(self, path: str) -> str:
+        return f"{self.base_url}{self.API_PREFIX}{path}"
+
+    def get_account(self) -> dict:
+        response = self.session.get(
+            self._url("/account"),
+            timeout=self.request_timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def accept_challenge(self, challenge_id: str) -> None:
+        response = self.session.post(
+            self._url(f"/challenge/{challenge_id}/accept"),
+            timeout=self.request_timeout,
+        )
+        response.raise_for_status()
+
+    def decline_challenge(
+        self, challenge_id: str, reason: str = "generic"
+    ) -> None:
+        response = self.session.post(
+            self._url(f"/challenge/{challenge_id}/decline"),
+            data={"reason": reason},
+            timeout=self.request_timeout,
+        )
+        response.raise_for_status()
+
+    def stream_events(self):
+        """
+        Streams global bot events. Lichess uses newline-delimited JSON.
+        """
+        with self.session.get(
+            self._url("/stream/event"),
+            stream=True,
+            timeout=(self.request_timeout, None),
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                yield json.loads(line)
+
+    def stream_game(self, game_id: str):
+        with self.session.get(
+            self._url(f"/bot/game/stream/{game_id}"),
+            stream=True,
+            timeout=(self.request_timeout, None),
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                yield json.loads(line)
+
+    def make_move(self, game_id: str, move: chess.Move) -> None:
+        uci = move.uci()
+        response = self.session.post(
+            self._url(f"/bot/game/{game_id}/move/{uci}"),
+            timeout=self.request_timeout,
+        )
+        response.raise_for_status()
+
+    def close(self) -> None:
+        self.session.close()
+
+
+# ---------------------------------------------------------------------------
+# Lichess game worker
+# ---------------------------------------------------------------------------
+class GameWorker(threading.Thread):
+    def __init__(
+        self,
+        client: LichessClient,
+        bot: OxydanBot,
+        active_games: ActiveGames,
+        game_id: str,
+        my_username: str,
+        challenge_id: Optional[str] = None,
+    ):
+        super().__init__(name=f"Game-{game_id}", daemon=True)
+        self.client = client
+        self.bot = bot
+        self.active_games = active_games
+        self.game_id = game_id
+        self.my_username = my_username.lower()
+        self.challenge_id = challenge_id
+
+    def _initial_board(self, game_full: dict) -> chess.Board:
+        initial_fen = game_full.get("initialFen") or game_full.get("fen")
+
+        # Lichess may identify the normal initial position as "startpos".
+        if not initial_fen or initial_fen in {
+            "startpos",
+            "standard",
+            chess.STARTING_FEN,
+        }:
+            return chess.Board()
+
+        return chess.Board(initial_fen)
+
+    @staticmethod
+    def _clock_for_side(state: dict, color: chess.Color) -> tuple[float, float]:
+        """
+        Lichess bot game states contain wtime/btime in milliseconds and
+        winc/binc in milliseconds.
+        """
+        if color == chess.WHITE:
+            return (
+                max(0.0, state.get("wtime", 0) / 1000.0),
+                max(0.0, state.get("winc", 0) / 1000.0),
+            )
+        return (
+            max(0.0, state.get("btime", 0) / 1000.0),
+            max(0.0, state.get("binc", 0) / 1000.0),
+        )
+
+    def run(self) -> None:
+        self.active_games.confirm_game_start(
+            self.game_id, self.challenge_id
+        )
+
         try:
-            for event in client.bots.stream_incoming_events():
-                if not event:
+            game_full = None
+            board = None
+            my_color: Optional[chess.Color] = None
+
+            for event in self.client.stream_game(self.game_id):
+                event_type = event.get("type")
+
+                if event_type == "gameFull":
+                    game_full = event
+                    white = event.get("white", {})
+                    black = event.get("black", {})
+
+                    white_id = str(white.get("id", "")).lower()
+                    white_name = str(white.get("name", "")).lower()
+                    black_id = str(black.get("id", "")).lower()
+                    black_name = str(black.get("name", "")).lower()
+
+                    if self.my_username in {white_id, white_name}:
+                        my_color = chess.WHITE
+                    elif self.my_username in {black_id, black_name}:
+                        my_color = chess.BLACK
+                    else:
+                        raise RuntimeError(
+                            f"Could not determine bot color in game {self.game_id}"
+                        )
+
+                    board = self._initial_board(game_full)
+
+                    state = event.get("state", {})
+                    moves_str = state.get("moves", "")
+                    for uci in moves_str.split():
+                        board.push_uci(uci)
+
+                elif event_type == "gameState":
+                    if game_full is None or board is None or my_color is None:
+                        logger.warning(
+                            "Received gameState before gameFull for %s; "
+                            "ignoring until full state arrives.",
+                            self.game_id,
+                        )
+                        continue
+
+                    moves_str = event.get("moves", "")
+                    board = self._initial_board(game_full)
+
+                    for uci in moves_str.split():
+                        board.push_uci(uci)
+
+                    status = event.get("status")
+                    if status and status != "started":
+                        logger.info(
+                            "Game %s finished: %s",
+                            self.game_id,
+                            status,
+                        )
+                        break
+
+                elif event_type == "chatLine":
                     continue
 
-                event_type = event.get("type")
-                elapsed = time.time() - start_time
-                max_runtime = getattr(settings.runtime, "max_total_runtime_seconds", 0)
+                elif event_type == "gameFinish":
+                    logger.info("Game %s finished.", self.game_id)
+                    break
 
-                if event_type == "challenge":
-                    ch = event["challenge"]
-                    ch_id = ch["id"]
+                if event_type not in {"gameFull", "gameState"}:
+                    continue
 
-                    tc = ch.get("timeControl") or {}
-                    time_limit = tc.get("limit", 0) or 0
-                    increment = tc.get("increment", 0) or 0
+                if board is None or my_color is None:
+                    continue
 
-                    if max_runtime > 0:
-                        time_remaining = max_runtime - elapsed
-                        estimated_game_duration = (time_limit * 2) + (increment * 120)
-                        is_time_safe = time_remaining > (
-                            estimated_game_duration
-                            + settings.runtime.min_game_seconds_remaining
-                        )
-                    else:
-                        is_time_safe = True
+                if board.is_game_over():
+                    break
 
-                    accept_mm, reason = True, "policy-default"
-                    if mm is not None:
-                        try:
-                            accept_mm, reason = mm.is_challenge_acceptable(ch)
-                        except Exception as exc:  # noqa: BLE001
-                            LOG.warning("mm.is_challenge_acceptable failed for %s: %s",
-                                        ch_id, exc)
-                            accept_mm, reason = True, "matchmaker-error"
+                # Only calculate when it is actually our turn.
+                if board.turn != my_color:
+                    continue
 
-                    can_accept = (
-                        is_time_safe
-                        and time_limit <= settings.runtime.max_game_time_limit
-                        and active.count() < settings.runtime.max_parallel_games
-                        and accept_mm
+                # gameFull has a nested state object; gameState is already
+                # the current state.
+                current_state = (
+                    event.get("state", {})
+                    if event_type == "gameFull"
+                    else event
+                )
+
+                my_time, my_inc = self._clock_for_side(
+                    current_state, my_color
+                )
+
+                logger.info(
+                    "Game %s to move as %s. Clock %.3fs + %.3fs",
+                    self.game_id,
+                    "white" if my_color == chess.WHITE else "black",
+                    my_time,
+                    my_inc,
+                )
+
+                move = self.bot.get_move(board, my_time, my_inc)
+
+                if move not in board.legal_moves:
+                    raise RuntimeError(
+                        f"Safety check failed: illegal move {move}"
                     )
 
-                    if can_accept:
-                        if active.try_reserve_slot():
-                            try:
-                                client.bots.accept_challenge(ch_id)
-                                LOG.info("✅ Accepted challenge %s", ch_id)
-                            except Exception as exc:  # noqa: BLE001
-                                LOG.warning("Failed to accept challenge %s: %s", ch_id, exc)
-                                active.release_reservation()
-                    else:
-                        decline_reason = "generic"
-                        if not is_time_safe:
-                            decline_reason = "later"
-                        elif time_limit > settings.runtime.max_game_time_limit:
-                            decline_reason = "tooSlow"
-                        elif active.count() >= settings.runtime.max_parallel_games:
-                            decline_reason = "later"
+                self.client.make_move(self.game_id, move)
 
-                        try:
-                            client.bots.decline_challenge(ch_id, reason=decline_reason)
-                            LOG.info("❌ Declined challenge %s (reason: %s | mm_reason: %s)",
-                                     ch_id, decline_reason, reason)
-                        except Exception as exc:  # noqa: BLE001
-                            LOG.warning("Failed to decline challenge %s: %s", ch_id, exc)
+                # Optimistically update our local board. The next gameState
+                # remains authoritative and will rebuild from the move list.
+                board.push(move)
 
-                elif event_type == "gameStart":
-                    game_id = event["game"]["id"]
-                    active.release_reservation()
-                    if active.add(game_id):
-                        t = threading.Thread(
-                            target=_handle_game,
-                            args=(client, game_id, bot, my_id, active, chat, mm),
-                            daemon=True,
-                            name=f"game-{game_id}",
-                        )
-                        t.start()
-                        LOG.info("🎮 Game thread started for %s", game_id)
+        except Exception:
+            logger.exception("Game worker crashed for %s", self.game_id)
+        finally:
+            self.active_games.game_finished(self.game_id)
 
-        except Exception as exc:  # noqa: BLE001
-            LOG.error("Error in incoming events stream: %s. Reconnecting in 5s...", exc)
-            time.sleep(5)
+
+# ---------------------------------------------------------------------------
+# Main Lichess bot manager
+# ---------------------------------------------------------------------------
+class LichessBotManager:
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        self.client = LichessClient(settings)
+        self.active_games = ActiveGames(settings.max_concurrent_games)
+        self.bot = OxydanBot(settings)
+        self.stop_event = threading.Event()
+        self.workers: Dict[str, GameWorker] = {}
+        self.lock = threading.Lock()
+        self.username = ""
+
+    def _handle_challenge(self, event: dict) -> None:
+        challenge = event.get("challenge", {})
+        challenge_id = challenge.get("id")
+        if not challenge_id:
+            return
+
+        challenger = challenge.get("challenger", {})
+        challenger_name = challenger.get("name", "?")
+        variant = challenge.get("variant", {}).get("key", "standard")
+
+        if not self.active_games.reserve_slot(challenge_id):
+            logger.info(
+                "Rejecting challenge %s from %s: no free game slot.",
+                challenge_id,
+                challenger_name,
+            )
+            try:
+                self.client.decline_challenge(
+                    challenge_id, reason="later"
+                )
+            except Exception:
+                logger.exception("Failed to decline challenge %s",
+                                 challenge_id)
+            return
+
+        # Keep the bot conservative: standard chess only.
+        if variant != "standard":
+            self.active_games.release_reservation(challenge_id)
+            try:
+                self.client.decline_challenge(
+                    challenge_id, reason="variant"
+                )
+            except Exception:
+                logger.exception("Failed to decline non-standard challenge")
+            return
+
+        try:
+            logger.info(
+                "Accepting challenge %s from %s",
+                challenge_id,
+                challenger_name,
+            )
+            self.client.accept_challenge(challenge_id)
+        except Exception:
+            self.active_games.release_reservation(challenge_id)
+            logger.exception(
+                "Failed to accept challenge %s", challenge_id
+            )
+
+    def _start_game(self, event: dict) -> None:
+        game = event.get("game", {})
+        game_id = game.get("id")
+        if not game_id:
+            return
+
+        with self.lock:
+            if game_id in self.workers:
+                return
+
+        worker = GameWorker(
+            client=self.client,
+            bot=self.bot,
+            active_games=self.active_games,
+            game_id=game_id,
+            my_username=self.username,
+            challenge_id=None,
+        )
+
+        with self.lock:
+            self.workers[game_id] = worker
+
+        worker.start()
+
+    def run(self) -> None:
+        account = self.client.get_account()
+        self.username = account.get("username", "").lower()
+        if not self.username:
+            raise RuntimeError("Could not determine bot username.")
+
+        logger.info("Authenticated as Lichess account: %s", self.username)
+
+        while not self.stop_event.is_set():
+            try:
+                for event in self.client.stream_events():
+                    if self.stop_event.is_set():
+                        break
+
+                    event_type = event.get("type")
+
+                    if event_type == "challenge":
+                        self._handle_challenge(event)
+
+                    elif event_type == "gameStart":
+                        self._start_game(event)
+
+            except requests.RequestException as exc:
+                if self.stop_event.is_set():
+                    break
+                logger.error("Lichess event stream error: %s", exc)
+                time.sleep(2.0)
+
+            except Exception:
+                if self.stop_event.is_set():
+                    break
+                logger.exception("Unexpected event loop error")
+                time.sleep(2.0)
+
+    def close(self) -> None:
+        self.stop_event.set()
+
+        self.client.close()
+        self.bot.close()
+
+
+# ---------------------------------------------------------------------------
+# Self-test
+# ---------------------------------------------------------------------------
+def run_self_test(settings: Settings) -> bool:
+    logger.info("=== Running Oxydan 12 Engine Self-Test ===")
+    bot: Optional[OxydanBot] = None
+
+    try:
+        bot = OxydanBot(settings)
+        board = chess.Board()
+
+        move = bot.get_move(
+            board,
+            my_time=180.0,
+            my_inc=2.0,
+        )
+
+        logger.info("Self-Test move: %s", move)
+
+        if move in board.legal_moves:
+            logger.info(
+                "Self-Test PASSED: legal move returned."
+            )
+            return True
+
+        logger.error("Self-Test FAILED: illegal move returned.")
+        return False
+
+    except Exception as exc:
+        logger.exception("Self-Test FAILED: %s", exc)
+        return False
+
+    finally:
+        if bot:
+            bot.close()
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Oxydan 12 Lichess Bot"
+    )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Run engine diagnostic self-test and exit.",
+    )
+    args = parser.parse_args()
+
+    settings = Config.settings
+
+    # Allow deployment without hard-coding the token into source.
+    import os
+
+    env_token = os.getenv("LICHESS_TOKEN")
+    if env_token:
+        settings.token = env_token
+
+    if args.self_test:
+        success = run_self_test(settings)
+        sys.exit(0 if success else 1)
+
+    manager = LichessBotManager(settings)
+
+    def shutdown_handler(sig, frame):
+        logger.info("Shutdown signal received.")
+        manager.close()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, shutdown_handler)
+    signal.signal(signal.SIGTERM, shutdown_handler)
+
+    logger.info("Oxydan 12 bot is running.")
+    try:
+        manager.run()
+    finally:
+        manager.close()
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

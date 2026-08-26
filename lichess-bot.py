@@ -140,7 +140,7 @@ class ActiveGames:
 # ---------------------------------------------------------------------------
 
 class RuntimeWatchdog(threading.Thread):
-    """Shuts the bot down after ``max_total_runtime_seconds`` (default 6h)."""
+    """Shuts the bot down after ``max_total_runtime_seconds`` if configured."""
 
     def __init__(self, start_time: float, active: ActiveGames) -> None:
         super().__init__(daemon=True, name="oxydan-watchdog")
@@ -148,10 +148,14 @@ class RuntimeWatchdog(threading.Thread):
         self._active = active
 
     def run(self) -> None:
+        max_runtime = getattr(settings.runtime, "max_total_runtime_seconds", 0)
+        if max_runtime <= 0:
+            return
+
         while True:
             time.sleep(30)
             elapsed = time.time() - self._start
-            if elapsed <= settings.runtime.max_total_runtime_seconds:
+            if elapsed <= max_runtime:
                 continue
             if self._active.count(include_pending=False) == 0:
                 LOG.info("⏰ Watchdog: runtime cap reached, exiting cleanly.")
@@ -167,13 +171,7 @@ class RuntimeWatchdog(threading.Thread):
 # ---------------------------------------------------------------------------
 
 class OxydanV12:
-    """Owns the engine pool and the time-management policy.
-
-    The previous class (``OxydanV11``) mixed engine-pool plumbing with
-    opening-book + tablebase + time-allocation logic in one ~200-line
-    method. ``OxydanV12`` factors those into named pieces so each can
-    be reasoned about independently.
-    """
+    """Owns the engine pool and the time-management policy."""
 
     def __init__(self, exe_path: str, uci_options: Optional[Dict[str, Any]] = None) -> None:
         self.exe_path = exe_path
@@ -196,7 +194,6 @@ class OxydanV12:
 
     @staticmethod
     def _configure(eng: chess.engine.SimpleEngine, options: Dict[str, Any], overhead: int) -> None:
-        # MoveOverhead has two spellings depending on engine; try both.
         for key in ("Move Overhead", "MoveOverhead"):
             try:
                 eng.configure({key: overhead})
@@ -211,7 +208,6 @@ class OxydanV12:
             except Exception:  # noqa: BLE001
                 LOG.debug("Engine ignored option %r=%r", opt, val)
 
-    # --- helpers --------------------------------------------------------
     @staticmethod
     def _to_seconds(value: Any) -> float:
         if value is None:
@@ -223,7 +219,6 @@ class OxydanV12:
         except (TypeError, ValueError):
             return 0.0
 
-    # --- quick position scoring (used for losing-realization chat) ----
     def get_score(self, board: chess.Board) -> Optional[int]:
         engine: Optional[chess.engine.SimpleEngine] = None
         try:
@@ -239,7 +234,6 @@ class OxydanV12:
                 self.engine_pool.put(engine)
         return None
 
-    # --- fallback: capture-priority move if engine totally fails --------
     def fallback_move(self, board: chess.Board) -> Optional[chess.Move]:
         legal = list(board.legal_moves)
         if not legal:
@@ -271,23 +265,11 @@ class OxydanV12:
                 best, best_score = mv, score
         return best
 
-    # --- master time allocation ----------------------------------------
     def _allocate_time(
         self,
         board: chess.Board,
         wtime: Any, btime: Any, winc: Any, binc: Any,
     ) -> Tuple[float, float, float, float]:
-        """Compute (my_clock, opp_clock, my_inc, opp_inc) for engine play.
-
-        Layers four policies on top of the raw clocks:
-
-        1. ``panic_threshold_s``   — pre-move speed, no inc.
-        2. ``transition_threshold_s`` — keep the increment, use 80% of clock.
-        3. ``opening_time_fraction`` — spend less in the first
-           ``opening_move_count`` plies.
-        4. ``complexity_extra_fraction`` — bonus past
-           ``complexity_moves_threshold`` plies (tactical middlegame).
-        """
         tm = settings.time_management
         buffer = tm.latency_buffer_ms / 1000.0
 
@@ -303,32 +285,25 @@ class OxydanV12:
         my_inc = self._to_seconds(my_inc_raw)
         op_inc = self._to_seconds(op_inc_raw)
 
-        # Layer 1: panic (sub-2s) — pre-move speed, no increment.
         if my_s < tm.panic_threshold_s:
             return max(0.010, my_s * 0.10), op_s, 0.0, op_inc
 
-        # Layer 2: transition band — keep increment, but use 80% of clock.
         if my_s < tm.transition_threshold_s:
             my_send = my_s * 0.8
             return my_send, op_s, my_inc, op_inc
 
-        # Layer 3: opening budget — first N plies spend less.
         ply = len(board.move_stack)
         if ply < tm.opening_move_count:
             my_send = my_s * tm.opening_time_fraction
             return my_send, op_s, my_inc, op_inc
 
-        # Layer 4: complexity bonus past the opening.
         if ply > tm.complexity_moves_threshold:
             extra = my_s * tm.complexity_extra_fraction
-            # Don't overspend: cap bonus at 30% of clock.
             my_send = min(my_s, my_s * 0.7 + extra)
             return my_send, op_s, my_inc, op_inc
 
-        # Default: give the engine the full clock.
         return my_s, op_s, my_inc, op_inc
 
-    # --- main entry: pick a move for the current position --------------
     def get_best_move(
         self,
         board: chess.Board,
@@ -337,7 +312,7 @@ class OxydanV12:
         move = self._try_opening_book(board)
         if move is not None:
             return move
-        move = self._try_online_tablebase(board, wtime, btime, wtime, btime)
+        move = self._try_online_tablebase(board, wtime, btime, winc, binc)
         if move is not None:
             return move
         move = self._try_engine(board, wtime, btime, winc, binc)
@@ -346,7 +321,6 @@ class OxydanV12:
         LOG.warning("Engine failed, falling back to heuristic.")
         return self.fallback_move(board)
 
-    # --- opening book (with optional Oxydan Learn weighting) -----------
     def _try_opening_book(self, board: chess.Board) -> Optional[chess.Move]:
         if board.chess960 or not os.path.exists(self.book_path):
             return None
@@ -356,22 +330,18 @@ class OxydanV12:
             if not entries:
                 return None
 
-            # Oxydan Learn: rank by historical win/loss.
             ranked = learn.rank_book_moves(board, entries)
-            # Inject small randomness so the same move doesn't repeat
-            # every game even when the weights are equal.
             ranked.sort(key=lambda pair: random.random() / max(pair[1], 0.01))
 
             for move, _weight in ranked:
                 if move not in board.legal_moves:
                     continue
-                # Avoid repeating the last few opening lines.
                 board.push(move)
                 key = learn.opening_key(board)
                 board.pop()
-                if not learn.weight_for_key(key) < 0.5:  # soft floor
+                if not learn.weight_for_key(key) < 0.5:
                     return move
-            # Last resort: first legal entry.
+
             for entry in entries:
                 if entry.move in board.legal_moves:
                     return entry.move
@@ -379,7 +349,6 @@ class OxydanV12:
             LOG.warning("📖 Opening book error: %s", exc)
         return None
 
-    # --- online 7-piece tablebase --------------------------------------
     def _try_online_tablebase(
         self, board: chess.Board, wtime: Any, btime: Any, _winc: Any, _binc: Any
     ) -> Optional[chess.Move]:
@@ -387,8 +356,7 @@ class OxydanV12:
             return None
         if len(board.piece_map()) > settings.tablebase.max_pieces:
             return None
-        # Need at least 15s on the clock; otherwise the network call
-        # is worse than the engine's own choice.
+
         my_clock = self._to_seconds(wtime if board.turn == chess.WHITE else btime)
         if my_clock < max(15.0, settings.tablebase.min_time_for_lookup):
             return None
@@ -396,7 +364,7 @@ class OxydanV12:
             r = requests.get(
                 "https://tablebase.lichess.ovh/standard",
                 params={"fen": board.fen()},
-                timeout=min(0.2, max(0.02, my_clock * 0.01)),
+                timeout=1.0,
             )
             if r.status_code == 200:
                 payload = r.json()
@@ -409,7 +377,6 @@ class OxydanV12:
             return None
         return None
 
-    # --- the actual engine ---------------------------------------------
     def _try_engine(
         self, board: chess.Board, wtime: Any, btime: Any, winc: Any, binc: Any,
     ) -> Optional[chess.Move]:
@@ -483,7 +450,7 @@ def _handle_game(
                 LOG.warning("Stream error for %s: %s", game_id, state["error"])
                 break
 
-            if state["type"] == "gameFull":
+            if state.get("type") == "gameFull":
                 white = state.get("white", {}) or {}
                 black = state.get("black", {}) or {}
                 rated = bool(state.get("rated", False))
@@ -515,12 +482,9 @@ def _handle_game(
                 last_move_count = 0
                 game_start_time = time.time()
                 losing_msg_sent = False
-
-                # Greeting is deferred to the first gameState event to
-                # make sure Lichess has officially opened the chat.
                 curr_state = state.get("state", {}) or {}
 
-            elif state["type"] == "gameState":
+            elif state.get("type") == "gameState":
                 curr_state = state
             else:
                 continue
@@ -528,7 +492,6 @@ def _handle_game(
             if board is None:
                 continue
 
-            # Greeting on first gameState (game has officially started).
             if not game_started:
                 if (curr_state.get("status") in ("started", "resign", "mate", "draw",
                                                  "outoftime", "stalemate", "aborted")
@@ -543,7 +506,6 @@ def _handle_game(
 
             if len(moves) > last_move_count:
                 for m in moves[last_move_count:]:
-                    # Lichess bot stream uses UCI notation.
                     try:
                         board.push(board.parse_uci(m))
                     except Exception as exc:  # noqa: BLE001
@@ -551,7 +513,6 @@ def _handle_game(
                         break
                 last_move_count = len(board.move_stack)
 
-            # Abort games where the opponent never shows up.
             if (not game_started
                     and game_start_time is not None
                     and (time.time() - game_start_time) > settings.runtime.abort_wait_seconds):
@@ -579,14 +540,12 @@ def _handle_game(
                     time.sleep(1)
                     _send("human_postgame")
 
-                # Oxydan Learn: book weighting for next time.
                 if result in ("win", "loss", "draw") and board.move_stack:
                     try:
                         learn.record_result(board, result)
                     except Exception as exc:  # noqa: BLE001
                         LOG.debug("oxydan_learn.record_result failed: %s", exc)
 
-                # Matchmaker: rating tracker + opponent tracker.
                 if mm and status != "aborted":
                     try:
                         mm.record_game_result(result, game_mode, opponent_id=opp_id)
@@ -599,7 +558,6 @@ def _handle_game(
                 )
                 break
 
-            # Optional "I know I'm losing" chat for humans.
             if (settings.oxydan_chat.score_chat_enabled
                     and is_vs_human
                     and not losing_msg_sent
@@ -614,7 +572,6 @@ def _handle_game(
                 except Exception as exc:  # noqa: BLE001
                     LOG.debug("score-chat probe failed: %s", exc)
 
-            # Our turn?
             if my_color is not None and board.turn == my_color and not board.is_game_over():
                 move = bot.get_best_move(
                     board,
@@ -666,10 +623,8 @@ def _self_test() -> int:
 
     board = chess.Board()
     try:
-        # The engine's opening-book path may be absent; that's fine.
         move = bot.get_best_move(board, 10000, 10000, 1000, 1000)
     finally:
-        # Drain pool to avoid orphan processes.
         while not bot.engine_pool.empty():
             try:
                 eng = bot.engine_pool.get_nowait()
@@ -722,7 +677,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         LOG.error("Could not connect to Lichess: %s", exc)
         return 1
 
-    # Local chat sender bound to the main client. Game threads share it.
     chat = ChatSender(client)
 
     bot = OxydanV12(
@@ -733,11 +687,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     active = ActiveGames()
     RuntimeWatchdog(start_time, active).start()
 
-    # Matchmaker thread (optional). mm is initialised to None so the
-    # `if mm:` checks below never raise NameError if construction fails.
     mm: Optional[Any] = None
     try:
-        from matchmaking import Matchmaker  # local import to avoid cycles
+        from matchmaking import Matchmaker
     except Exception as exc:  # noqa: BLE001
         LOG.error("matchmaking module failed to import: %s", exc)
         Matchmaker = None  # type: ignore[assignment]
@@ -765,11 +717,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     while True:
         try:
             for event in client.bots.stream_incoming_events():
-                # Respect the runtime cap.
-                elapsed = time.time() - start_time
-                time_remaining = settings.runtime.max_total_runtime_seconds - elapsed
+                if not event:
+                    continue
 
-                if event.get("type") == "challenge":
+                event_type = event.get("type")
+                elapsed = time.time() - start_time
+                max_runtime = getattr(settings.runtime, "max_total_runtime_seconds", 0)
+
+                if event_type == "challenge":
                     ch = event["challenge"]
                     ch_id = ch["id"]
 
@@ -777,78 +732,71 @@ def main(argv: Optional[List[str]] = None) -> int:
                     time_limit = tc.get("limit", 0) or 0
                     increment = tc.get("increment", 0) or 0
 
-                    estimated_game_duration = (time_limit * 2) + (increment * 120)
-                    is_time_safe = time_remaining > (
-                        estimated_game_duration
-                        + settings.runtime.min_game_seconds_remaining
-                    )
+                    if max_runtime > 0:
+                        time_remaining = max_runtime - elapsed
+                        estimated_game_duration = (time_limit * 2) + (increment * 120)
+                        is_time_safe = time_remaining > (
+                            estimated_game_duration
+                            + settings.runtime.min_game_seconds_remaining
+                        )
+                    else:
+                        is_time_safe = True
 
-                    # Delegate the policy decision to the matchmaker.
-                    accept, reason = True, "policy-default"
+                    accept_mm, reason = True, "policy-default"
                     if mm is not None:
                         try:
-                            accept, reason = mm.is_challenge_acceptable(ch)
+                            accept_mm, reason = mm.is_challenge_acceptable(ch)
                         except Exception as exc:  # noqa: BLE001
                             LOG.warning("mm.is_challenge_acceptable failed for %s: %s",
                                         ch_id, exc)
-                            accept, reason = True, "matchmaker-error"
+                            accept_mm, reason = True, "matchmaker-error"
 
                     can_accept = (
                         is_time_safe
                         and time_limit <= settings.runtime.max_game_time_limit
                         and active.count() < settings.runtime.max_parallel_games
-                        and accept
+                        and accept_mm
                     )
 
-                    if not can_accept:
+                    if can_accept:
+                        if active.try_reserve_slot():
+                            try:
+                                client.bots.accept_challenge(ch_id)
+                                LOG.info("✅ Accepted challenge %s", ch_id)
+                            except Exception as exc:  # noqa: BLE001
+                                LOG.warning("Failed to accept challenge %s: %s", ch_id, exc)
+                                active.release_reservation()
+                    else:
+                        decline_reason = "generic"
                         if not is_time_safe:
-                            detail = (f"runtime window too tight "
-                                      f"({int(time_remaining)}s < {int(estimated_game_duration)}s)")
+                            decline_reason = "later"
                         elif time_limit > settings.runtime.max_game_time_limit:
-                            detail = f"game too long ({time_limit}s)"
+                            decline_reason = "tooSlow"
                         elif active.count() >= settings.runtime.max_parallel_games:
-                            detail = "parallel game cap reached"
-                        elif not accept:
-                            detail = reason or "policy"
-                        else:
-                            detail = "unknown"
+                            decline_reason = "later"
+
                         try:
-                            client.challenges.decline(ch_id, reason="later")
-                            LOG.info("❌ Declined %s: %s (reason: %s)",
-                                     ch_id, detail, reason)
+                            client.bots.decline_challenge(ch_id, reason=decline_reason)
+                            LOG.info("❌ Declined challenge %s (reason: %s | mm_reason: %s)",
+                                     ch_id, decline_reason, reason)
                         except Exception as exc:  # noqa: BLE001
-                            LOG.warning("Decline failed for %s: %s", ch_id, exc)
-                        continue
+                            LOG.warning("Failed to decline challenge %s: %s", ch_id, exc)
 
-                    if not active.try_reserve_slot():
-                        try:
-                            client.challenges.decline(ch_id, reason="later")
-                        except Exception as exc:  # noqa: BLE001
-                            LOG.warning("Decline (no-slot) failed for %s: %s", ch_id, exc)
-                        continue
-
-                    try:
-                        client.challenges.accept(ch_id)
-                        LOG.info("✅ Accepted %s (est %ds, %.0fs left, reason: %s)",
-                                 ch_id, int(estimated_game_duration), time_remaining, reason)
-                    except Exception as exc:  # noqa: BLE001
-                        active.release_reservation()
-                        LOG.warning("Accept failed for %s: %s", ch_id, exc)
-
-                elif event.get("type") == "gameStart":
+                elif event_type == "gameStart":
                     game_id = event["game"]["id"]
                     active.release_reservation()
                     if active.add(game_id):
-                        threading.Thread(
+                        t = threading.Thread(
                             target=_handle_game,
                             args=(client, game_id, bot, my_id, active, chat, mm),
                             daemon=True,
-                            name=f"game-{game_id[:6]}",
-                        ).start()
-                    else:
-                        LOG.warning("Skipped gameStart for %s — no slot.", game_id)
+                            name=f"game-{game_id}",
+                        )
+                        t.start()
+                        LOG.info("🎮 Game thread started for %s", game_id)
+
         except Exception as exc:  # noqa: BLE001
-            LOG.warning("Event stream dropped, reconnecting: %s", exc)
+            LOG.error("Error in incoming events stream: %s. Reconnecting in 5s...", exc)
             time.sleep(5)
 
 

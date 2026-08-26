@@ -30,10 +30,11 @@ jobs:
       - name: Download opening book
         run: |
           echo "📚 Downloading Cerebellum opening book..."
+          mkdir -p books
           curl -L "https://github.com/Scriptionz/Oxydan-Chess-Bot/releases/download/v1_Book/Cerebellum3Merge.zip" -o book.zip
           unzip -o book.zip
-          mv Cerebellum3Merge.bin book.bin
-          echo "✅ Book ready: $(ls -lh book.bin)"
+          mv Cerebellum3Merge.bin books/Cerebellum3Merge.bin
+          echo "✅ Book ready: $(ls -lh books/Cerebellum3Merge.bin)"
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -63,7 +64,15 @@ jobs:
           fi
           cd ..
 
+      - name: Inject Lichess Token
+        env:
+          LICHESS_TOKEN: ${{ secrets.LICHESS_TOKEN }}
+        run: |
+          python -c "import os; text = open('config.yml').read().replace('\$LICHESS_TOKEN', os.environ['LICHESS_TOKEN']); open('config.yml', 'w').write(text)"
+
       - name: Pre-flight self-test
+        env:
+          LICHESS_TOKEN: ${{ secrets.LICHESS_TOKEN }}
         run: |
           chmod +x ./src/Ethereal
           python lichess-bot.py --self-test
@@ -72,7 +81,4 @@ jobs:
         env:
           LICHESS_TOKEN: ${{ secrets.LICHESS_TOKEN }}
         run: |
-          # Substitute $LICHESS_TOKEN placeholder. Python is used here so
-          # tokens with special characters don't break sed.
-          python -c "import os; text = open('config.yml').read().replace('\$LICHESS_TOKEN', os.environ['LICHESS_TOKEN']); open('config.yml', 'w').write(text)"
           python -u lichess-bot.py

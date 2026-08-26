@@ -116,26 +116,31 @@ class RatingTracker:
                       new_rating: Optional[int] = None) -> None:
         with self._lock:
             was_in_protection = self._in_protection
+            activated_this_result = False
 
             if isinstance(new_rating, int) and mode in self._current:
                 old = self._current[mode]
                 self._current[mode] = new_rating
                 drop = old - new_rating
                 if drop >= settings.matchmaking.rating_drop_threshold:
-                    self._activate_protection(
-                        f"{mode} rating dropped {drop} ({old}→{new_rating})"
-                    )
+                    if not self._in_protection:
+                        self._activate_protection(
+                            f"{mode} rating dropped {drop} ({old}→{new_rating})"
+                        )
+                        activated_this_result = True
 
             if result == "loss":
                 self._losing_streak += 1
                 if self._losing_streak >= settings.matchmaking.losing_streak_limit:
-                    self._activate_protection(
-                        f"{self._losing_streak} losses in a row"
-                    )
+                    if not self._in_protection:
+                        self._activate_protection(
+                            f"{self._losing_streak} losses in a row"
+                        )
+                        activated_this_result = True
             else:
                 self._losing_streak = 0
 
-            if was_in_protection:
+            if was_in_protection and not activated_this_result:
                 self._protection_games -= 1
                 if self._protection_games <= 0:
                     self._in_protection = False
@@ -198,6 +203,8 @@ class Matchmaker:
         self._last_cleanup = 0.0
         self._last_pool_update = 0.0  # _refresh_bot_pool içindeki AttributeError hatasını çözen değişken
     
+        self._http = requests.Session()
+        self._http.headers.update({"User-Agent": USER_AGENT})
         self._rating_tracker = RatingTracker(self._client)
         self._rating_tracker.initialize_baselines()
         self._initialize_id()
@@ -212,10 +219,16 @@ class Matchmaker:
             return 0
 
     def _auth_headers(self) -> Dict[str, str]:
-        h = {"User-Agent": USER_AGENT}
+        h = {"User-Agent": USER_AGENT, "Accept": "application/json"}
         if self._token:
             h["Authorization"] = f"Bearer {self._token}"
         return h
+
+    def _raise_for_api_status(self, response: requests.Response) -> None:
+        if response.status_code == 429:
+            raise RuntimeError("HTTP 429")
+        if response.status_code in (401, 403):
+            raise RuntimeError(f"HTTP {response.status_code}: API authentication/permission failure")
 
     def _initialize_id(self) -> None:
         try:
@@ -304,15 +317,16 @@ class Matchmaker:
 
     def _fetch_arena_tournaments(self) -> List[Dict[str, Any]]:
         try:
-            r = requests.get(
+            r = self._http.get(
                 "https://lichess.org/api/tournament",
                 headers=self._auth_headers(), timeout=10,
             )
-            if r.status_code == 429:
-                raise RuntimeError("HTTP 429")
+            self._raise_for_api_status(r)
             if r.status_code == 200:
                 data = r.json() or {}
+                self._reset_429_counter()
                 return list(data.get("created", []) or []) + list(data.get("started", []) or [])
+            raise RuntimeError(f"HTTP {r.status_code}")
         except RuntimeError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -323,7 +337,7 @@ class Matchmaker:
         out: List[Dict[str, Any]] = []
         for team in teams:
             try:
-                r = requests.get(
+                r = self._http.get(
                     f"https://lichess.org/api/team/{team}/arena",
                     headers=self._auth_headers(), timeout=10,
                 )
@@ -346,7 +360,7 @@ class Matchmaker:
         out: List[Dict[str, Any]] = []
         for team in teams:
             try:
-                r = requests.get(
+                r = self._http.get(
                     f"https://lichess.org/api/team/{team}/swiss",
                     headers=self._auth_headers(),
                     params={"status": "created"}, timeout=10,
@@ -368,13 +382,15 @@ class Matchmaker:
 
     def _join_arena(self, tid: str) -> bool:
         try:
-            r = requests.post(
+            r = self._http.post(
                 f"https://lichess.org/api/tournament/{tid}/join",
                 headers=self._auth_headers(), timeout=10,
             )
-            if r.status_code == 429:
-                raise RuntimeError("HTTP 429")
-            return r.status_code == 200
+            self._raise_for_api_status(r)
+            if 200 <= r.status_code < 300:
+                self._reset_429_counter()
+                return True
+            return False
         except RuntimeError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -383,13 +399,15 @@ class Matchmaker:
 
     def _join_swiss(self, sid: str) -> bool:
         try:
-            r = requests.post(
+            r = self._http.post(
                 f"https://lichess.org/api/swiss/{sid}/join",
                 headers=self._auth_headers(), timeout=10,
             )
-            if r.status_code == 429:
-                raise RuntimeError("HTTP 429")
-            return r.status_code == 200
+            self._raise_for_api_status(r)
+            if 200 <= r.status_code < 300:
+                self._reset_429_counter()
+                return True
+            return False
         except RuntimeError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -421,35 +439,39 @@ class Matchmaker:
             self._last_tournament_scan = now
 
         self._prune_tournaments()
-
+        join_allowed = True
         with self._state_lock:
             last_join = self._last_tournament_join
         if now - last_join < settings.matchmaking.tournament_cooldown:
-            return
+            join_allowed = False
 
         teams = list(settings.teams.get("allowed_teams") or ["lichess-bots"])
 
         candidates: List[Tuple[str, str, Dict[str, Any]]] = []  # (kind, id, data)
+        seen_ids = set()
 
         try:
             for t in self._fetch_arena_tournaments():
                 tid = t.get("id")
-                if tid and not self._already_knows_tournament(tid) and self._tournament_is_acceptable(t):
+                if tid and tid not in seen_ids and not self._already_knows_tournament(tid) and self._tournament_is_acceptable(t):
+                    seen_ids.add(tid)
                     candidates.append(("arena", tid, t))
             for t in self._fetch_team_arena_tournaments(teams):
                 tid = t.get("id")
-                if tid and not self._already_knows_tournament(tid) and self._tournament_is_acceptable(t):
+                if tid and tid not in seen_ids and not self._already_knows_tournament(tid) and self._tournament_is_acceptable(t):
+                    seen_ids.add(tid)
                     candidates.append(("team_arena", tid, t))
             for s in self._fetch_swiss_tournaments(teams):
                 sid = s.get("id")
-                if sid and not self._already_knows_tournament(sid) and self._tournament_is_acceptable(s):
+                if sid and sid not in seen_ids and not self._already_knows_tournament(sid) and self._tournament_is_acceptable(s):
+                    seen_ids.add(sid)
                     candidates.append(("swiss", sid, s))
         except RuntimeError:
             # 429 from the fetchers — bump counter, back off.
             self._bump_429()
             return
 
-        if not candidates:
+        if not candidates or not join_allowed:
             return
 
         # Prefer tournaments starting soonest.
@@ -632,7 +654,7 @@ class Matchmaker:
     
         # Bulk user lookup
         try:
-            r = requests.post(
+            r = self._http.post(
                 "https://lichess.org/api/users",
                 headers=self._auth_headers(),
                 data=",".join(candidates),
@@ -686,8 +708,16 @@ class Matchmaker:
         now = datetime.now()
         with self._opponent_lock:
             self._blacklist = {k: v for k, v in self._blacklist.items() if v > now}
-            self._opponent_tracker.clear()
+            # Do not wipe _opponent_tracker here. The configured
+            # max_games_per_opponent limit should remain meaningful between
+            # cleanups. The blacklist itself carries the time-based expiry.
         LOG.info("🧹 Opponent history and expired blacklist entries cleared.")
+
+    def close(self) -> None:
+        try:
+            self._http.close()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Main loop
@@ -750,12 +780,6 @@ class Matchmaker:
                     played, settings.matchmaking.max_games_per_opponent,
                 )
 
-                # Blacklist BEFORE the call so we don't re-target if it succeeds.
-                with self._opponent_lock:
-                    self._blacklist[target.lower()] = datetime.now() + timedelta(
-                        minutes=settings.matchmaking.blacklist_minutes
-                    )
-
                 try:
                     self._client.challenges.create(
                         username=target,
@@ -764,8 +788,13 @@ class Matchmaker:
                         clock_limit=limit_sn,
                         clock_increment=inc_sn,
                     )
-                    # Successful API call → clear 429 debt.
+                    # Successful API call → clear 429 debt and apply the
+                    # normal no-repeat blacklist.
                     self._reset_429_counter()
+                    with self._opponent_lock:
+                        self._blacklist[target.lower()] = datetime.now() + timedelta(
+                            minutes=settings.matchmaking.blacklist_minutes
+                        )
                 except Exception as exc:  # noqa: BLE001
                     if "429" in str(exc):
                         raise RuntimeError("HTTP 429 Rate Limit Exceeded") from exc

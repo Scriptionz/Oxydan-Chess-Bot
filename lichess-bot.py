@@ -41,7 +41,7 @@ class Settings:
     #   LICHESS_TOKEN=your_token
     token: str = os.getenv("LICHESS_TOKEN", "")
     lichess_base_url: str = "https://lichess.org"
-    engine_path: str = "stockfish"
+    engine_path: str = os.getenv("ENGINE_PATH", "./src/Ethereal")
     threads_per_engine: int = 2
     hash_mb: int = 256
     max_concurrent_games: int = 2

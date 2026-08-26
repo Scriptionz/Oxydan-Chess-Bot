@@ -39,7 +39,7 @@ class TimeManagerConfig:
 class Settings:
     # Prefer an environment variable in production:
     #   LICHESS_TOKEN=your_token
-    token: str = "YOUR_LICHESS_API_TOKEN"
+    token: str = os.getenv("LICHESS_TOKEN", "")
     lichess_base_url: str = "https://lichess.org"
     engine_path: str = "stockfish"
     threads_per_engine: int = 2
@@ -234,6 +234,7 @@ class OxydanBot:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.session = requests.Session()
+        self._tb_local = threading.local()
         self.engine_pool = EnginePool(
             settings.engine_path,
             settings.threads_per_engine,
@@ -307,6 +308,16 @@ class OxydanBot:
 
         return None
 
+    def _tablebase_session(self) -> requests.Session:
+        session = getattr(self._tb_local, "session", None)
+        if session is None:
+            session = requests.Session()
+            session.headers.update(
+                {"User-Agent": "Oxydan12/1.0"}
+            )
+            self._tb_local.session = session
+        return session
+
     def _probe_online_tablebase(
         self, board: chess.Board
     ) -> Optional[chess.Move]:
@@ -316,7 +327,7 @@ class OxydanBot:
             return None
 
         try:
-            response = self.session.get(
+            response = self._tablebase_session().get(
                 "https://tablebase.lichess.ovh/standard",
                 params={"fen": board.fen()},
                 timeout=self.settings.tablebase_timeout_sec,
@@ -501,25 +512,38 @@ class LichessClient:
                     continue
                 yield json.loads(line)
 
+    def _thread_session(self) -> requests.Session:
+        session = requests.Session()
+        session.headers.update(self.session.headers)
+        return session
+
     def stream_game(self, game_id: str):
-        with self.session.get(
-            self._url(f"/bot/game/stream/{game_id}"),
-            stream=True,
-            timeout=(self.request_timeout, None),
-        ) as response:
-            response.raise_for_status()
-            for line in response.iter_lines(decode_unicode=True):
-                if not line:
-                    continue
-                yield json.loads(line)
+        session = self._thread_session()
+        try:
+            with session.get(
+                self._url(f"/bot/game/stream/{game_id}"),
+                stream=True,
+                timeout=(self.request_timeout, None),
+            ) as response:
+                response.raise_for_status()
+                for line in response.iter_lines(decode_unicode=True):
+                    if not line:
+                        continue
+                    yield json.loads(line)
+        finally:
+            session.close()
 
     def make_move(self, game_id: str, move: chess.Move) -> None:
         uci = move.uci()
-        response = self.session.post(
-            self._url(f"/bot/game/{game_id}/move/{uci}"),
-            timeout=self.request_timeout,
-        )
-        response.raise_for_status()
+        session = self._thread_session()
+        try:
+            response = session.post(
+                self._url(f"/bot/game/{game_id}/move/{uci}"),
+                timeout=self.request_timeout,
+            )
+            response.raise_for_status()
+        finally:
+            session.close()
 
     def close(self) -> None:
         self.session.close()
@@ -760,6 +784,16 @@ class LichessBotManager:
                 "Failed to accept challenge %s", challenge_id
             )
 
+    def _cleanup_workers(self) -> None:
+        with self.lock:
+            finished = [
+                game_id
+                for game_id, worker in self.workers.items()
+                if not worker.is_alive()
+            ]
+            for game_id in finished:
+                self.workers.pop(game_id, None)
+
     def _start_game(self, event: dict) -> None:
         game = event.get("game", {})
         game_id = game.get("id")
@@ -794,10 +828,13 @@ class LichessBotManager:
 
         while not self.stop_event.is_set():
             try:
+                self._cleanup_workers()
+
                 for event in self.client.stream_events():
                     if self.stop_event.is_set():
                         break
 
+                    self._cleanup_workers()
                     event_type = event.get("type")
 
                     if event_type == "challenge":
@@ -878,13 +915,7 @@ def main() -> None:
 
     settings = Config.settings
 
-    # Allow deployment without hard-coding the token into source.
-    import os
-
-    env_token = os.getenv("LICHESS_TOKEN")
-    if env_token:
-        settings.token = env_token
-
+    # Token is loaded from the LICHESS_TOKEN environment variable.
     if args.self_test:
         success = run_self_test(settings)
         sys.exit(0 if success else 1)

@@ -33,11 +33,18 @@ engine:
   protocol: "uci"
   uci_options:
     Threads: 2
-    Hash: 512
+    Hash: 256
     MoveOverhead: 100
     Ponder: true
     SyzygyPath: "./syzygy"
     SyzygyProbeDepth: 1
+
+# --- OPENING BOOK (Polyglot) ----------------------------------------------
+# Opening book settings using Polyglot (.bin) format.
+opening_book:
+  enabled: true
+  path: "books/Cerebellum3Merge.bin"
+  selection: "weighted"  # Options: 'weighted', 'best', 'uniform'
 
 # --- IN-GAME CHAT (Lichess-bot spec) --------------------------------------
 # These are the user-facing welcome/goodbye strings shown in the
@@ -45,7 +52,7 @@ engine:
 # win/loss replies, etc.) live in `oxydan_chat.py` and are easy to
 # extend from there.
 chat:
-  welcome: "Hi! Oxydan 11 active. Good luck!"
+  welcome: "Hi! Oxydan 12 active. Good luck!"
   goodbye: "GG! Thanks for the game."
 
 # --- TEAMS ----------------------------------------------------------------

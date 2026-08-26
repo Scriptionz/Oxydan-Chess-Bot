@@ -12,7 +12,7 @@ import chess
 import chess.engine
 import chess.polyglot
 import requests
-
+import os
 
 # ---------------------------------------------------------------------------
 # Logging & Configuration
